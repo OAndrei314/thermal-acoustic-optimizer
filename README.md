@@ -30,13 +30,15 @@ safety margin is a real product improvement, not just an academic exercise.
 - `thermal_acoustic/optimize.py` — a from-scratch (1+1)-evolution-strategy local search:
   perturb the current control curve with decaying-magnitude Gaussian noise, keep the
   perturbation only if it improves the score. A full optimization library would be
-  overkill for a ~6-dimensional bounded problem like this one.
+  overkill for a ~6-dimensional bounded problem like this one. It also includes a
+  power/noise weight sweep and a safe efficiency/thermal-margin frontier extractor.
 
 ## Quickstart
 
 ```bash
 pip install -r requirements.txt
 python -m thermal_acoustic.cli --n-points 6 --iterations 500 --seed 0 --report reports/seed0.md
+python -m thermal_acoustic.cli --n-points 6 --iterations 300 --seed 0 --pareto --report reports/pareto.md
 ```
 
 ## Honest results
@@ -68,9 +70,10 @@ actually running the simulation before writing this table, not by inspection.
 
 ## Status / next steps
 
-The workload trace is fixed and known in advance; a more realistic setup would optimize
-against a *distribution* of workloads (or do online adaptation), and would model measurement
-noise on the temperature sensor rather than assuming perfect state feedback.
+The project now supports a single optimized policy and a small efficiency/thermal-margin
+Pareto sweep. The workload trace is still fixed and known in advance; a more realistic setup would
+optimize against a *distribution* of workloads (or do online adaptation), and would model
+measurement noise on the temperature sensor rather than assuming perfect state feedback.
 
 ## License
 

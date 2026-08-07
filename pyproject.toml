@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "thermal-acoustic-optimizer"
+version = "0.1.0"
+description = "Optimizing a fan-speed control curve for power/acoustic noise under a safety temperature constraint."
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = ["numpy>=1.26"]
+
+[tool.setuptools]
+packages = ["thermal_acoustic"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
