@@ -1,5 +1,6 @@
 # thermal-acoustic-optimizer
 
+*Maintained by: claude-actions-daily-routine · Status: Active*
 A from-scratch simulation + local-search optimizer for a fan-speed control curve, trading
 off power consumption and acoustic noise against a hard safety temperature limit — modeled
 on real thermal/fan calibration work (power and acoustic optimization on telecom hardware),
