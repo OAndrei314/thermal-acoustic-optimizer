@@ -6,13 +6,13 @@ off power consumption and acoustic noise against a hard safety temperature limit
 on real thermal/fan calibration work (power and acoustic optimization on telecom hardware),
 fully synthetic and simplified, not a reproduction of any real chassis or dataset.
 
-## Research + money thesis
+## Why this matters
 
 **Research question:** starting from an always-on baseline and a naive linear ramp, how
 much power and acoustic noise can a simple local-search optimizer save on a fixed
 synthetic workload, without ever crossing the safety temperature limit?
 
-**Money question:** fan power is a direct line item in a system's power budget, and
+**Practical impact:** fan power is a direct line item in a system's power budget, and
 acoustic limits are often a hard customer or regulatory requirement in telecom/embedded
 hardware — not a nice-to-have. A control curve that's quieter and lower-power at the same
 safety margin is a real product improvement, not just an academic exercise.
