@@ -32,7 +32,12 @@ safety margin is a real product improvement, not just an academic exercise.
   perturb the current control curve with decaying-magnitude Gaussian noise, keep the
   perturbation only if it improves the score. A full optimization library would be
   overkill for a ~6-dimensional bounded problem like this one. It also includes a
-  power/noise weight sweep and a safe efficiency/thermal-margin frontier extractor.
+  power/noise weight sweep and a safe efficiency/thermal-margin frontier extractor, plus a
+  noise-aware "robust" mode that scores each candidate as the mean over several noisy-sensor
+  rollouts instead of one noiseless rollout.
+- `thermal_acoustic/robustness.py` — Monte-Carlo evaluation of a *fixed* policy's safety
+  under sensor read noise: how often does the true temperature actually cross the limit,
+  not just what the noiseless objective predicts.
 
 ## Quickstart
 
@@ -40,6 +45,9 @@ safety margin is a real product improvement, not just an academic exercise.
 pip install -r requirements.txt
 python -m thermal_acoustic.cli --n-points 6 --iterations 500 --seed 0 --report reports/seed0.md
 python -m thermal_acoustic.cli --n-points 6 --iterations 300 --seed 0 --pareto --report reports/pareto.md
+python -m thermal_acoustic.cli --n-points 6 --iterations 500 --seed 0 \
+    --sensor-noise-std 1.5 --noise-trials 300 --noise-trials-per-eval 20 \
+    --report reports/seed0_robustness.md
 ```
 
 ## Honest results
@@ -69,12 +77,46 @@ cooling-coefficient constant I picked made the safety limit **unreachable even a
 speed** (every policy showed as unsafe) — a modeling bug, not a control problem. Caught by
 actually running the simulation before writing this table, not by inspection.
 
+### Sensor-noise robustness
+
+The table above is noiseless: the controller reads the true temperature exactly. That's
+unrealistic, and the README used to just flag it as a caveat ("this simulation has zero
+measurement noise"). Now it's actually modeled: the controller only sees the true
+temperature plus additive Gaussian read noise, while the real thermal state (and the
+safety check) still uses the true, noiseless temperature — noise degrades the *decision*,
+not the physics.
+
+Re-evaluating the `optimized` policy above (still tuned assuming a perfect sensor) against
+1.5°C of sensor noise, 300 Monte-Carlo trials, seed 0:
+
+| policy | violation rate | mean max temp (°C) | worst max temp (°C) | mean power (W) |
+| --- | ---: | ---: | ---: | ---: |
+| optimized (noiseless-tuned) | 100.0% | 87.0 | 88.7 | 1.08 |
+| robust_optimized (5 MC samples/eval) | 44.3% | 85.0 | 85.9 | 1.18 |
+| robust_optimized (20 MC samples/eval) | 8.3% | 84.5 | 85.5 | 1.19 |
+| robust_optimized (50 MC samples/eval) | 3.0% | 84.3 | 85.3 | — |
+
+The `optimized` policy hugging the wall at 84.99°C means it violates the real safety limit
+on *every single* noisy trial once you add realistic sensor noise — the exact fragility the
+first-pass README predicted but never actually measured. Training the same optimizer
+against noisy rollouts (`--sensor-noise-std`) fixes most of that at under a 10% power cost,
+but doesn't fully eliminate it at the default 5-sample-per-candidate setting — the accept
+criterion compares a candidate's noisy score against a *stale* score for the current best,
+so a small sample size lets unlucky/lucky noise draws bias the walk. Increasing
+`--noise-trials-per-eval` (more Monte Carlo samples per candidate evaluation) trades
+optimization compute for a lower residual violation rate: 44%→8%→3% at 5→20→50 samples,
+a real, honestly-measured, non-free tradeoff, not a fully solved problem.
+
 ## Status / next steps
 
-The project now supports a single optimized policy and a small efficiency/thermal-margin
-Pareto sweep. The workload trace is still fixed and known in advance; a more realistic setup would
-optimize against a *distribution* of workloads (or do online adaptation), and would model
-measurement noise on the temperature sensor rather than assuming perfect state feedback.
+The project now supports a single optimized policy, a small efficiency/thermal-margin
+Pareto sweep, and noise-aware robust optimization against sensor read noise. The workload
+trace is still fixed and known in advance; a more realistic setup would optimize against a
+*distribution* of workloads (or do online adaptation) rather than one fixed trace. The
+residual violation rate at low `--noise-trials-per-eval` settings is also a real, open
+weakness of the plain accept-if-better-than-stale-score search — a proper stochastic
+optimizer (e.g. re-evaluating the incumbent each round, or an explicit confidence-based
+acceptance rule) would likely close more of that gap than just raising the sample count.
 
 ## License
 

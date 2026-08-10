@@ -17,8 +17,13 @@ def evaluate_policy(
     heat_w: np.ndarray,
     power_weight: float = 1.0,
     noise_weight: float = 1.0,
+    sensor_noise_std: float = 0.0,
+    rng: np.random.Generator | None = None,
 ) -> dict:
-    result = simulate_policy(control_points, temp_breakpoints, heat_w)
+    result = simulate_policy(
+        control_points, temp_breakpoints, heat_w,
+        sensor_noise_std=sensor_noise_std, rng=rng,
+    )
     mean_power = float(np.mean(result.powers))
     mean_noise = float(np.mean(result.noises_db))
 
