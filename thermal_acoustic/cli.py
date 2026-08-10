@@ -10,6 +10,7 @@ from .objective import evaluate_policy
 from .optimize import optimize_policy, optimize_tradeoff_sweep, pareto_frontier
 from .policies import always_on_policy, linear_ramp_policy
 from .report import render_markdown_report
+from .robustness import evaluate_robustness
 from .simulate import T_AMBIENT_C, T_SAFETY_MAX_C
 from .workload import heat_trace
 
@@ -30,6 +31,22 @@ def main(argv: list[str] | None = None) -> int:
         help="comma-separated noise weights for the Pareto sweep; power weight stays 1",
     )
     parser.add_argument("--report", help="optional markdown report path")
+    parser.add_argument(
+        "--sensor-noise-std",
+        type=float,
+        default=0.0,
+        help="if > 0, also Monte-Carlo evaluate the optimized policy's safety under this "
+        "much Gaussian sensor read noise (degC), and run a second noise-aware 'robust' "
+        "optimization pass for comparison",
+    )
+    parser.add_argument("--noise-trials", type=int, default=200, help="Monte-Carlo trials for the robustness check")
+    parser.add_argument(
+        "--noise-trials-per-eval",
+        type=int,
+        default=5,
+        help="Monte-Carlo samples averaged per candidate score during robust optimization "
+        "(higher = more accurate noisy-score estimate, slower to run)",
+    )
     args = parser.parse_args(argv)
 
     temp_breakpoints = np.linspace(T_AMBIENT_C, T_SAFETY_MAX_C, args.n_points)
@@ -82,10 +99,39 @@ def main(argv: list[str] | None = None) -> int:
                 f"{ev['max_temp_c']:<13.1f} {'yes' if point.label in frontier_labels else 'no':<8}"
             )
 
+    robustness = None
+    if args.sensor_noise_std > 0:
+        robustness = {}
+        robustness["optimized"] = evaluate_robustness(
+            result.control_points, temp_breakpoints, heat_w,
+            sensor_noise_std=args.sensor_noise_std, n_trials=args.noise_trials, seed=args.seed,
+        )
+
+        robust_result = optimize_policy(
+            temp_breakpoints, heat_w, init=baselines["linear_ramp"],
+            iterations=args.iterations, seed=args.seed,
+            sensor_noise_std=args.sensor_noise_std,
+            noise_trials_per_eval=args.noise_trials_per_eval,
+        )
+        evaluations["robust_optimized"] = evaluate_policy(robust_result.control_points, temp_breakpoints, heat_w)
+        robustness["robust_optimized"] = evaluate_robustness(
+            robust_result.control_points, temp_breakpoints, heat_w,
+            sensor_noise_std=args.sensor_noise_std, n_trials=args.noise_trials, seed=args.seed,
+        )
+
+        print("")
+        print(f"sensor noise std: {args.sensor_noise_std:.2f} degC, {args.noise_trials} Monte-Carlo trials")
+        print(f"{'policy':<18} {'violation rate':<15} {'mean max_temp(C)':<18} {'worst max_temp(C)':<18}")
+        for name, rob in robustness.items():
+            print(
+                f"{name:<18} {rob['safety_violation_rate']:<15.1%} "
+                f"{rob['mean_max_temp_c']:<18.1f} {rob['worst_max_temp_c']:<18.1f}"
+            )
+
     if args.report:
         os.makedirs(os.path.dirname(args.report) or ".", exist_ok=True)
         with open(args.report, "w", encoding="utf-8") as f:
-            f.write(render_markdown_report(evaluations, pareto_points, frontier))
+            f.write(render_markdown_report(evaluations, pareto_points, frontier, robustness))
     return 0
 
 

@@ -15,6 +15,7 @@ def render_markdown_report(
     evaluations: dict[str, dict],
     pareto_points: list[ParetoPoint] | None = None,
     frontier: list[ParetoPoint] | None = None,
+    robustness: dict[str, dict] | None = None,
 ) -> str:
     lines = [
         "# Thermal / Acoustic Fan Control Report",
@@ -25,7 +26,7 @@ def render_markdown_report(
         "acoustic noise can a from-scratch local-search optimizer save on a fixed synthetic",
         "workload, without ever crossing the safety temperature limit?",
         "",
-        "## Money question",
+        "## Why this matters",
         "",
         "Fan power and acoustic behavior are real product constraints in telecom/embedded",
         "hardware -- acoustic limits are often a hard customer/regulatory requirement, and",
@@ -63,6 +64,34 @@ def render_markdown_report(
                 "",
                 "The frontier marks safe policies that are not dominated on power, noise,",
                 "and maximum temperature by another safe policy in the sweep.",
+            ]
+        )
+
+    if robustness:
+        lines.extend(
+            [
+                "",
+                "## Sensor-Noise Robustness (Monte Carlo)",
+                "",
+                "The noiseless optimizer assumes the controller reads the true temperature",
+                "exactly. This section re-evaluates policies with additive Gaussian noise on",
+                "the *measured* temperature the controller reacts to, while the real thermal",
+                "state (and the safety check) still uses the true temperature.",
+                "",
+                "| policy | violation rate | mean max temp (°C) | worst max temp (°C) |",
+                "| --- | ---: | ---: | ---: |",
+            ]
+        )
+        for name, rob in robustness.items():
+            lines.append(
+                f"| {name} | {rob['safety_violation_rate']:.1%} | "
+                f"{rob['mean_max_temp_c']:.1f} | {rob['worst_max_temp_c']:.1f} |"
+            )
+        lines.extend(
+            [
+                "",
+                f"({next(iter(robustness.values()))['n_trials']} trials, "
+                f"sensor noise std = {next(iter(robustness.values()))['sensor_noise_std']:.2f} °C)",
             ]
         )
 

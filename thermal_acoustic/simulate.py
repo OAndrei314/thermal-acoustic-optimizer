@@ -46,7 +46,19 @@ def simulate_policy(
     temp_breakpoints: np.ndarray,
     heat_w: np.ndarray,
     dt_min: float = 1.0,
+    sensor_noise_std: float = 0.0,
+    rng: np.random.Generator | None = None,
 ) -> SimResult:
+    """Run the closed-loop simulation. If sensor_noise_std > 0, the fan controller only
+    ever sees a noisy *measurement* of the true temperature (additive Gaussian, iid per
+    step) -- modeling a real sensor's read noise -- while the actual thermal state and the
+    safety check both use the true, noiseless temperature. That asymmetry is deliberate:
+    a real safety violation is about the true junction/ambient temperature, not about what
+    a noisy sensor happened to report.
+    """
+    if sensor_noise_std > 0 and rng is None:
+        raise ValueError("sensor_noise_std > 0 requires an rng for reproducible noise")
+
     n = len(heat_w)
     temps = np.zeros(n)
     fan_speeds = np.zeros(n)
@@ -55,7 +67,8 @@ def simulate_policy(
 
     T = T_AMBIENT_C
     for i in range(n):
-        speed = fan_speed_for_temp(control_points, temp_breakpoints, T)
+        measured_T = T if sensor_noise_std <= 0 else T + rng.normal(0.0, sensor_noise_std)
+        speed = fan_speed_for_temp(control_points, temp_breakpoints, measured_T)
         heat_removed = K_COOL * (speed**COOL_EXPONENT) * max(T - T_AMBIENT_C, 0.0)
         dT = (heat_w[i] - heat_removed) / THERMAL_CAPACITANCE * dt_min
         T = T + dT

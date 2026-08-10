@@ -37,12 +37,34 @@ def optimize_policy(
     step_decay: float = 0.995,
     power_weight: float = 1.0,
     noise_weight: float = 1.0,
+    sensor_noise_std: float = 0.0,
+    noise_trials_per_eval: int = 5,
 ) -> OptimizeResult:
+    """sensor_noise_std > 0 makes this a *robust* optimization: each candidate is scored
+    as the mean over `noise_trials_per_eval` independent noisy-sensor rollouts instead of
+    one noiseless rollout. A candidate that only looks good because it hugs the safety
+    limit under perfect feedback will, on average, cross the limit on some of those
+    rollouts and pick up the safety penalty -- so the search is naturally pushed away from
+    the wall, without any explicit margin term in the objective.
+    """
     rng = np.random.default_rng(seed)
+    noise_rng = np.random.default_rng(seed + 1_000_000) if sensor_noise_std > 0 else None
     n_points = len(init)
 
+    def score_of(control_points: np.ndarray) -> float:
+        if sensor_noise_std <= 0:
+            return evaluate_policy(control_points, temp_breakpoints, heat_w, power_weight, noise_weight)["score"]
+        trial_scores = [
+            evaluate_policy(
+                control_points, temp_breakpoints, heat_w, power_weight, noise_weight,
+                sensor_noise_std=sensor_noise_std, rng=noise_rng,
+            )["score"]
+            for _ in range(noise_trials_per_eval)
+        ]
+        return float(np.mean(trial_scores))
+
     current = np.array(init, dtype=float)
-    current_score = evaluate_policy(current, temp_breakpoints, heat_w, power_weight, noise_weight)["score"]
+    current_score = score_of(current)
     best = current.copy()
     best_score = current_score
     history = [best_score]
@@ -50,7 +72,7 @@ def optimize_policy(
     step = initial_step
     for _ in range(iterations):
         candidate = np.clip(current + rng.normal(0, step, size=n_points), 0.0, 1.0)
-        cand_score = evaluate_policy(candidate, temp_breakpoints, heat_w, power_weight, noise_weight)["score"]
+        cand_score = score_of(candidate)
         if cand_score < current_score:
             current, current_score = candidate, cand_score
             if current_score < best_score:
