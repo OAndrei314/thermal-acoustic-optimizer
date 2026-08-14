@@ -3,6 +3,7 @@ import numpy as np
 from thermal_acoustic.objective import evaluate_policy
 from thermal_acoustic.optimize import optimize_policy, optimize_tradeoff_sweep, pareto_frontier
 from thermal_acoustic.policies import linear_ramp_policy
+from thermal_acoustic.robustness import evaluate_robustness
 from thermal_acoustic.simulate import T_AMBIENT_C, T_SAFETY_MAX_C
 from thermal_acoustic.workload import heat_trace
 
@@ -46,3 +47,52 @@ def test_tradeoff_sweep_returns_safe_frontier_points():
     assert len(points) == 3
     assert frontier
     assert all(not point.evaluation["safety_violated"] for point in frontier)
+
+
+def test_reevaluate_incumbent_is_a_no_op_without_sensor_noise():
+    """reevaluate_incumbent only matters for the noisy accept/reject decision -- with no
+    sensor noise, score_of() is deterministic, so re-scoring the incumbent must return the
+    exact same value and the whole search trajectory must be unchanged."""
+    heat_w = heat_trace()
+    temp_breakpoints = np.linspace(T_AMBIENT_C, T_SAFETY_MAX_C, 6)
+    baseline = linear_ramp_policy(6)
+
+    plain = optimize_policy(temp_breakpoints, heat_w, init=baseline, iterations=200, seed=0)
+    reeval = optimize_policy(
+        temp_breakpoints, heat_w, init=baseline, iterations=200, seed=0, reevaluate_incumbent=True
+    )
+
+    assert reeval.score == plain.score
+    assert reeval.history == plain.history
+    assert np.array_equal(reeval.control_points, plain.control_points)
+
+
+def test_reevaluate_incumbent_reduces_safety_violation_rate_under_sensor_noise():
+    """Regression test for the staleness bias flagged in the README: the default robust
+    optimizer compares a freshly-sampled candidate score against a stale incumbent score
+    that hasn't been resampled since it was accepted, which lets lucky/unlucky noise
+    draws bias the walk. Re-scoring the incumbent fresh every iteration should measurably
+    cut the real (Monte-Carlo-evaluated) safety violation rate at a fixed sample budget --
+    this reproduces the ~44% -> ~12% drop measured in the README at iterations=500,
+    noise_trials_per_eval=5, sensor_noise_std=1.5, seed=0."""
+    heat_w = heat_trace()
+    temp_breakpoints = np.linspace(T_AMBIENT_C, T_SAFETY_MAX_C, 6)
+    baseline = linear_ramp_policy(6)
+
+    stale = optimize_policy(
+        temp_breakpoints, heat_w, init=baseline, iterations=500, seed=0,
+        sensor_noise_std=1.5, noise_trials_per_eval=5, reevaluate_incumbent=False,
+    )
+    fresh = optimize_policy(
+        temp_breakpoints, heat_w, init=baseline, iterations=500, seed=0,
+        sensor_noise_std=1.5, noise_trials_per_eval=5, reevaluate_incumbent=True,
+    )
+
+    stale_rob = evaluate_robustness(
+        stale.control_points, temp_breakpoints, heat_w, sensor_noise_std=1.5, n_trials=200, seed=0
+    )
+    fresh_rob = evaluate_robustness(
+        fresh.control_points, temp_breakpoints, heat_w, sensor_noise_std=1.5, n_trials=200, seed=0
+    )
+
+    assert fresh_rob["safety_violation_rate"] < stale_rob["safety_violation_rate"] - 0.1

@@ -47,6 +47,13 @@ def main(argv: list[str] | None = None) -> int:
         help="Monte-Carlo samples averaged per candidate score during robust optimization "
         "(higher = more accurate noisy-score estimate, slower to run)",
     )
+    parser.add_argument(
+        "--compare-reevaluate-incumbent",
+        action="store_true",
+        help="also run the robust optimization pass with a fresh-noise incumbent "
+        "re-score each iteration (instead of the default stale incumbent score), and "
+        "report both side by side",
+    )
     args = parser.parse_args(argv)
 
     temp_breakpoints = np.linspace(T_AMBIENT_C, T_SAFETY_MAX_C, args.n_points)
@@ -118,6 +125,22 @@ def main(argv: list[str] | None = None) -> int:
             robust_result.control_points, temp_breakpoints, heat_w,
             sensor_noise_std=args.sensor_noise_std, n_trials=args.noise_trials, seed=args.seed,
         )
+
+        if args.compare_reevaluate_incumbent:
+            reeval_result = optimize_policy(
+                temp_breakpoints, heat_w, init=baselines["linear_ramp"],
+                iterations=args.iterations, seed=args.seed,
+                sensor_noise_std=args.sensor_noise_std,
+                noise_trials_per_eval=args.noise_trials_per_eval,
+                reevaluate_incumbent=True,
+            )
+            evaluations["robust_optimized_reeval"] = evaluate_policy(
+                reeval_result.control_points, temp_breakpoints, heat_w
+            )
+            robustness["robust_optimized_reeval"] = evaluate_robustness(
+                reeval_result.control_points, temp_breakpoints, heat_w,
+                sensor_noise_std=args.sensor_noise_std, n_trials=args.noise_trials, seed=args.seed,
+            )
 
         print("")
         print(f"sensor noise std: {args.sensor_noise_std:.2f} degC, {args.noise_trials} Monte-Carlo trials")
