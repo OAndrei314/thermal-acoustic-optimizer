@@ -48,6 +48,9 @@ python -m thermal_acoustic.cli --n-points 6 --iterations 300 --seed 0 --pareto -
 python -m thermal_acoustic.cli --n-points 6 --iterations 500 --seed 0 \
     --sensor-noise-std 1.5 --noise-trials 300 --noise-trials-per-eval 20 \
     --report reports/seed0_robustness.md
+python -m thermal_acoustic.cli --n-points 6 --iterations 500 --seed 0 \
+    --sensor-noise-std 1.5 --noise-trials 300 --noise-trials-per-eval 20 \
+    --compare-reevaluate-incumbent --report reports/seed0_reeval.md
 ```
 
 ## Honest results
@@ -107,16 +110,44 @@ so a small sample size lets unlucky/lucky noise draws bias the walk. Increasing
 optimization compute for a lower residual violation rate: 44%→8%→3% at 5→20→50 samples,
 a real, honestly-measured, non-free tradeoff, not a fully solved problem.
 
+### Fixing the stale-incumbent bias
+
+The previous section's own theory was that the accept criterion compares a fresh candidate
+score against a *stale* incumbent score, and that re-scoring the incumbent every iteration
+(`reevaluate_incumbent=True` / CLI `--compare-reevaluate-incumbent`) should close some of
+that gap. That was a hypothesis, not a measurement — so it's now implemented and tested
+against the same `--sensor-noise-std 1.5 --noise-trials 300 --seed 0` setup used above:
+
+| `--noise-trials-per-eval` | stale-incumbent violation rate | fresh-incumbent violation rate | power (stale → fresh) |
+| ---: | ---: | ---: | :---: |
+| 5 | 44.3% | **11.7%** | 1.16W → 1.18W |
+| 20 | 8.3% | **0.7%** | 1.19W → 1.19W |
+| 50 | 3.0% | **1.3%** | 1.21W → 1.22W |
+
+Re-scoring the incumbent cuts the violation rate by roughly 3-12x at every sample budget
+tested, for a power cost in the noise (≤0.02W). It isn't free, though: resampling the
+incumbent doubles the simulation calls per iteration, so it's not simply "the same search,
+fixed" — it's spending more compute per iteration in exchange for an unbiased accept
+decision. To check it's not just "more compute wins," `stale @ 40 samples/eval` (the same
+total simulation calls per iteration as `fresh @ 20`) was also measured: it lands at a 9.3%
+violation rate, still ~13x worse than `fresh @ 20`'s 0.7% at matched compute — confirming
+this is a real fix to a biased comparison, not just extra sampling.
+
+Run it yourself with `--compare-reevaluate-incumbent` on the sensor-noise command above.
+
 ## Status / next steps
 
 The project now supports a single optimized policy, a small efficiency/thermal-margin
-Pareto sweep, and noise-aware robust optimization against sensor read noise. The workload
-trace is still fixed and known in advance; a more realistic setup would optimize against a
-*distribution* of workloads (or do online adaptation) rather than one fixed trace. The
-residual violation rate at low `--noise-trials-per-eval` settings is also a real, open
-weakness of the plain accept-if-better-than-stale-score search — a proper stochastic
-optimizer (e.g. re-evaluating the incumbent each round, or an explicit confidence-based
-acceptance rule) would likely close more of that gap than just raising the sample count.
+Pareto sweep, noise-aware robust optimization against sensor read noise, and (as of this
+change) a fresh-incumbent accept rule that fixes most of the residual safety-violation gap
+that noise-aware optimization left open. What's left: the workload trace is still fixed and
+known in advance; a more realistic setup would optimize against a *distribution* of
+workloads (or do online adaptation) rather than one fixed trace. The fresh-incumbent fix
+also still leaves a small non-zero violation rate at every sample budget tested (0.7-11.7%,
+not 0%) — an explicit confidence-based acceptance rule (only accept a candidate when the
+estimated score difference exceeds its standard error) would likely close more of that
+residual than further raising the sample count, but hasn't been implemented or measured
+here.
 
 ## License
 

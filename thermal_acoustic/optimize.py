@@ -39,6 +39,7 @@ def optimize_policy(
     noise_weight: float = 1.0,
     sensor_noise_std: float = 0.0,
     noise_trials_per_eval: int = 5,
+    reevaluate_incumbent: bool = False,
 ) -> OptimizeResult:
     """sensor_noise_std > 0 makes this a *robust* optimization: each candidate is scored
     as the mean over `noise_trials_per_eval` independent noisy-sensor rollouts instead of
@@ -46,6 +47,15 @@ def optimize_policy(
     limit under perfect feedback will, on average, cross the limit on some of those
     rollouts and pick up the safety penalty -- so the search is naturally pushed away from
     the wall, without any explicit margin term in the objective.
+
+    reevaluate_incumbent (only meaningful when sensor_noise_std > 0): by default the
+    incumbent's score is whatever noisy sample happened to win it the last acceptance,
+    and stays frozen until something beats it -- so an incumbent that got a lucky
+    low-noise draw can block real improvements for many iterations, and an incumbent
+    that got an unlucky high draw can be replaced by a candidate that isn't actually
+    better on average. Setting this True resamples the incumbent's score fresh (new
+    noise draws) every iteration before comparing, at roughly double the simulation
+    calls per iteration, which removes that staleness bias.
     """
     rng = np.random.default_rng(seed)
     noise_rng = np.random.default_rng(seed + 1_000_000) if sensor_noise_std > 0 else None
@@ -71,6 +81,8 @@ def optimize_policy(
 
     step = initial_step
     for _ in range(iterations):
+        if reevaluate_incumbent and sensor_noise_std > 0:
+            current_score = score_of(current)
         candidate = np.clip(current + rng.normal(0, step, size=n_points), 0.0, 1.0)
         cand_score = score_of(candidate)
         if cand_score < current_score:
