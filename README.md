@@ -51,6 +51,9 @@ python -m thermal_acoustic.cli --n-points 6 --iterations 500 --seed 0 \
 python -m thermal_acoustic.cli --n-points 6 --iterations 500 --seed 0 \
     --sensor-noise-std 1.5 --noise-trials 300 --noise-trials-per-eval 20 \
     --compare-reevaluate-incumbent --report reports/seed0_reeval.md
+python -m thermal_acoustic.cli --n-points 6 --iterations 500 --seed 0 \
+    --sensor-noise-std 1.5 --noise-trials 300 --noise-trials-per-eval 20 \
+    --compare-reevaluate-incumbent --confidence-z 1.5 --report reports/seed0_confidence.md
 ```
 
 ## Honest results
@@ -135,19 +138,68 @@ this is a real fix to a biased comparison, not just extra sampling.
 
 Run it yourself with `--compare-reevaluate-incumbent` on the sensor-noise command above.
 
+### Trying a confidence-based accept rule (an honest negative result)
+
+The previous section's own next-step suggestion was that an explicit confidence-based
+accept rule — only take a candidate when its estimated improvement over the incumbent
+exceeds some number of standard errors of that estimate, instead of accepting *any*
+estimated improvement — would likely close more of the residual violation-rate gap than
+raising the sample count further. That's now implemented (`confidence_z=` /
+CLI `--confidence-z`, requiring `reevaluate_incumbent`-style fresh resampling of both
+sides every iteration) — and measuring it honestly does **not** confirm the hypothesis.
+
+At seed 0, `--sensor-noise-std 1.5 --noise-trials 300`:
+
+| `--noise-trials-per-eval` | fresh-incumbent violation rate | confidence-gated violation rate (z) |
+| ---: | ---: | :---: |
+| 5 | 11.7% | 31.0% (z=1.0) |
+| 20 | 0.7% | 3.7% (z=1.5) |
+
+That's *worse*, not better — and seed 0 alone isn't enough to trust either way, so it was
+re-run across seeds 0-3 (`iterations=500`, same noise settings, `evaluate_robustness`
+Monte-Carlo'd at 300 trials per policy):
+
+| samples/eval | fresh-incumbent (mean over 4 seeds) | confidence-gated (mean over 4 seeds) | confidence beats fresh |
+| ---: | ---: | ---: | :---: |
+| 5 (z=1.0) | 23.3% | 31.7% | 1 / 4 seeds |
+| 20 (z=1.5) | 7.8% | 7.9% | 2 / 4 seeds (incl. 1 tie) |
+| 50 (z=1.5) | 1.1% | 2.3% | 1 / 4 seeds (incl. 1 tie) |
+
+The confidence-gated variant loses to the plain fresh-incumbent rule more often than it
+wins, at every sample budget tested, and the gap is largest exactly where you'd most want
+the "be more careful before accepting" rule to help: `noise_trials_per_eval=5`. This is a
+real, reproducible effect, not a fluke of one seed — but it's the opposite of what the
+rule was supposed to do, which is worth reporting plainly rather than quietly dropping the
+comparison.
+
+**Working theory for why (not yet verified):** the accept test estimates each side's
+standard error from only `noise_trials_per_eval` samples and compares the estimated gap
+against a fixed z (normal) critical value. That's the correct test only if the standard
+error were known exactly; here it's itself estimated from a small sample, so the
+statistically correct critical value comes from a Student's-t distribution with
+`noise_trials_per_eval - 1` degrees of freedom, which has heavier tails than the normal at
+low degrees of freedom (df=4 at `noise_trials_per_eval=5`). Using a z critical value where
+a t critical value is called for makes the test *less* strict than its nominal confidence
+level suggests, which would let more marginal, noise-driven "improvements" through — the
+opposite of the intended effect, and worse the smaller the sample. That plausibly explains
+why the effect is largest at `noise_trials_per_eval=5` and mostly washes out by 50. It
+hasn't been implemented or measured here, so treat it as a hypothesis, not a result.
+
 ## Status / next steps
 
 The project now supports a single optimized policy, a small efficiency/thermal-margin
-Pareto sweep, noise-aware robust optimization against sensor read noise, and (as of this
-change) a fresh-incumbent accept rule that fixes most of the residual safety-violation gap
-that noise-aware optimization left open. What's left: the workload trace is still fixed and
-known in advance; a more realistic setup would optimize against a *distribution* of
-workloads (or do online adaptation) rather than one fixed trace. The fresh-incumbent fix
-also still leaves a small non-zero violation rate at every sample budget tested (0.7-11.7%,
-not 0%) — an explicit confidence-based acceptance rule (only accept a candidate when the
-estimated score difference exceeds its standard error) would likely close more of that
-residual than further raising the sample count, but hasn't been implemented or measured
-here.
+Pareto sweep, noise-aware robust optimization against sensor read noise, a fresh-incumbent
+accept rule that fixes most of the residual safety-violation gap noise-aware optimization
+left open, and a confidence-based accept rule that was implemented specifically to close
+the rest of that gap and, measured honestly across seeds, does not. What's left: the
+workload trace is still fixed and known in advance; a more realistic setup would optimize
+against a *distribution* of workloads (or do online adaptation) rather than one fixed
+trace. On the confidence-gating side specifically, the next concrete step is to swap the
+fixed z critical value for a proper small-sample test (Student's-t on
+`noise_trials_per_eval - 1` degrees of freedom, or a Welch-Satterthwaite two-sample t if
+the two sides' variances are treated as unequal) and re-run the same seed-0-through-3
+comparison to see whether that recovers the improvement the naive z-based version failed
+to deliver.
 
 ## License
 
