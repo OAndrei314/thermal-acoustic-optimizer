@@ -54,6 +54,16 @@ def main(argv: list[str] | None = None) -> int:
         "re-score each iteration (instead of the default stale incumbent score), and "
         "report both side by side",
     )
+    parser.add_argument(
+        "--confidence-z",
+        type=float,
+        default=0.0,
+        help="if > 0 (only meaningful with --sensor-noise-std > 0), also run a robust "
+        "optimization pass that only accepts a candidate when its noisy score beats the "
+        "freshly-resampled incumbent's by more than this many standard errors of the "
+        "estimated difference (an approximate significance test, not just 'any "
+        "improvement'), and report it alongside the other variants",
+    )
     args = parser.parse_args(argv)
 
     temp_breakpoints = np.linspace(T_AMBIENT_C, T_SAFETY_MAX_C, args.n_points)
@@ -139,6 +149,22 @@ def main(argv: list[str] | None = None) -> int:
             )
             robustness["robust_optimized_reeval"] = evaluate_robustness(
                 reeval_result.control_points, temp_breakpoints, heat_w,
+                sensor_noise_std=args.sensor_noise_std, n_trials=args.noise_trials, seed=args.seed,
+            )
+
+        if args.confidence_z > 0:
+            confidence_result = optimize_policy(
+                temp_breakpoints, heat_w, init=baselines["linear_ramp"],
+                iterations=args.iterations, seed=args.seed,
+                sensor_noise_std=args.sensor_noise_std,
+                noise_trials_per_eval=args.noise_trials_per_eval,
+                confidence_z=args.confidence_z,
+            )
+            evaluations["robust_optimized_confidence"] = evaluate_policy(
+                confidence_result.control_points, temp_breakpoints, heat_w
+            )
+            robustness["robust_optimized_confidence"] = evaluate_robustness(
+                confidence_result.control_points, temp_breakpoints, heat_w,
                 sensor_noise_std=args.sensor_noise_std, n_trials=args.noise_trials, seed=args.seed,
             )
 
