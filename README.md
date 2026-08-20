@@ -185,21 +185,62 @@ opposite of the intended effect, and worse the smaller the sample. That plausibl
 why the effect is largest at `noise_trials_per_eval=5` and mostly washes out by 50. It
 hasn't been implemented or measured here, so treat it as a hypothesis, not a result.
 
+### Fixing the z-vs-t gap directly (a second honest negative result)
+
+The previous section's theory was concrete and testable: swap the fixed z critical value
+for a proper small-sample Student's-t value — specifically a Welch-Satterthwaite
+two-sample t, since the incumbent's and candidate's noisy-score variances are each
+estimated independently and aren't assumed equal — and see whether that recovers the
+improvement the naive z-based version failed to deliver. That's now implemented
+(`thermal_acoustic/stats.py`: `welch_satterthwaite_df` + `t_critical_from_z`, wired into
+`confidence_z`'s accept test in `optimize.py`), and measuring it honestly again does
+**not** confirm the hypothesis.
+
+Re-running the same seed-0-through-3, `--sensor-noise-std 1.5 --noise-trials 300` sweep,
+comparing the t-corrected `confidence_z` variant against plain fresh-incumbent:
+
+| samples/eval | fresh-incumbent (mean over 4 seeds) | t-gated (mean over 4 seeds) | z-gated (from previous section) | t-gated beats fresh |
+| ---: | ---: | ---: | ---: | :---: |
+| 5 (z=1.0) | 23.1% | 31.5% | 31.7% | 0 / 4 seeds |
+| 20 (z=1.5) | 9.2% | 9.1% | 7.9% | 3 / 4 seeds (incl. 1 tie) |
+| 50 (z=1.5) | 1.7% | 4.2% | 2.3% | 1 / 4 seeds |
+
+The t-corrected gate performs about the same as the naive z-gate at every sample budget —
+sometimes marginally better, sometimes marginally worse, never a clear win over either the
+z-gate or plain fresh-incumbent. The seed-to-seed variance in these numbers (compare the
+`23.1%` vs. `23.3%` fresh-incumbent means, recomputed from a fresh Monte-Carlo draw rather
+than reused from the earlier table) is itself as large as the effect being measured.
+
+**Why the fix didn't move the needle:** the Welch-Satterthwaite critical value was checked
+directly against the plain z value at these settings — `t_critical_from_z(1.0, df=8) =
+1.067` at `noise_trials_per_eval=5` (only 6.7% larger than z), `t_critical_from_z(1.5,
+df=38) = 1.533` at 20 samples (2.2% larger), and `t_critical_from_z(1.5, df=98) = 1.513`
+at 50 samples (0.8% larger). The original theory was right that the z-based test is
+*technically* too lenient, but wrong about the fix mattering in practice: at these sample
+sizes the correction is a few percent, nowhere near large enough to flip more than a
+handful of accept/reject decisions across 500 search iterations. The real gap between
+confidence-gating (in either form) and plain fresh-incumbent isn't a small-sample
+statistics bug — it's that *any* gate stricter than "any measured improvement" slows the
+search's ability to back away from the safety wall once it's already there, and that cost
+outweighs the benefit of filtering noise-driven acceptances at this problem's scale. Worth
+recording as a second confirmed negative result rather than re-tuning the same idea a
+third time.
+
 ## Status / next steps
 
 The project now supports a single optimized policy, a small efficiency/thermal-margin
 Pareto sweep, noise-aware robust optimization against sensor read noise, a fresh-incumbent
 accept rule that fixes most of the residual safety-violation gap noise-aware optimization
-left open, and a confidence-based accept rule that was implemented specifically to close
-the rest of that gap and, measured honestly across seeds, does not. What's left: the
-workload trace is still fixed and known in advance; a more realistic setup would optimize
-against a *distribution* of workloads (or do online adaptation) rather than one fixed
-trace. On the confidence-gating side specifically, the next concrete step is to swap the
-fixed z critical value for a proper small-sample test (Student's-t on
-`noise_trials_per_eval - 1` degrees of freedom, or a Welch-Satterthwaite two-sample t if
-the two sides' variances are treated as unequal) and re-run the same seed-0-through-3
-comparison to see whether that recovers the improvement the naive z-based version failed
-to deliver.
+left open, and two confidence-based accept rule variants (naive z-gate, then a
+statistically-correct Welch-Satterthwaite t-gate) that were each implemented specifically
+to close the rest of that gap and, measured honestly across seeds, neither does — the
+t-correction itself is real and correctly implemented, it's just too small at these sample
+sizes to change the outcome. Confidence-gating as an approach is now a settled negative
+result for this problem, not worth a third variant. What's left: the workload trace is
+still fixed and known in advance; a more realistic setup would optimize against a
+*distribution* of workloads (or do online adaptation) rather than one fixed trace — that's
+the more promising direction for further work here than continuing to refine the
+accept-rule statistics.
 
 ## License
 
