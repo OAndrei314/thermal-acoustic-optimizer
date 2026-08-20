@@ -33,8 +33,14 @@ def test_welch_satterthwaite_df_ignores_n_when_that_side_has_zero_variance():
 
 
 def test_t_critical_from_z_zero_is_zero_regardless_of_df():
+    """The t distribution is symmetric about 0 at every df, so the median (and
+    hence the 50th-percentile critical value for z=0) is exactly 0 in theory --
+    allow a tiny numerical tolerance since scipy's t.ppf inverts a CDF
+    iteratively and isn't bit-exact across platforms/versions, especially at
+    df=1 (the Cauchy distribution, notoriously ill-conditioned near its
+    median)."""
     for df in (1, 4, 19, 49, 1000):
-        assert t_critical_from_z(0.0, df) == 0.0
+        assert math.isclose(t_critical_from_z(0.0, df), 0.0, abs_tol=1e-9)
 
 
 def test_t_critical_from_z_matches_z_at_infinite_df():
