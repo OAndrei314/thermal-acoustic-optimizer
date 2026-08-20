@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .objective import evaluate_policy
+from .stats import t_critical_from_z, welch_satterthwaite_df
 
 
 @dataclass(frozen=True)
@@ -63,14 +64,19 @@ def optimize_policy(
     than the incumbent's, even when that gap is well within the sampling noise of both
     means -- so a run of unlucky candidate draws or lucky incumbent draws can still bias
     the walk. Setting this to a positive z-score instead only accepts a candidate when
-    the estimated improvement (incumbent mean - candidate mean) exceeds `confidence_z`
-    standard errors of that difference, i.e. an approximate one-sided z-test on the two
-    independent noisy-sample means (Gaussian/CLT approximation from
-    `noise_trials_per_eval` samples per side, not an exact small-sample test). This
-    forces the incumbent to be resampled fresh every iteration regardless of
-    `reevaluate_incumbent`, since a stale incumbent's standard error is not comparable
-    to a freshly-drawn candidate's. Requires `noise_trials_per_eval >= 2` to estimate a
-    standard error at all.
+    the estimated improvement (incumbent mean - candidate mean) exceeds a critical value
+    times the standard error of that difference. `confidence_z` is a *nominal*
+    z-equivalent confidence level (e.g. 1.5 ~ the one-sided normal tail at z=1.5); the
+    actual critical value applied is the Welch-Satterthwaite two-sample Student's-t
+    value at that same tail probability, using the effective degrees of freedom implied
+    by `noise_trials_per_eval` samples per side (see `thermal_acoustic.stats`). Both
+    standard errors are themselves estimated from only `noise_trials_per_eval` samples,
+    so treating them as exact (a plain z-test) understates the true uncertainty at low
+    sample counts -- the t-distribution's heavier tails correct for that, converging to
+    the z critical value as `noise_trials_per_eval` grows. This forces the incumbent to
+    be resampled fresh every iteration regardless of `reevaluate_incumbent`, since a
+    stale incumbent's standard error is not comparable to a freshly-drawn candidate's.
+    Requires `noise_trials_per_eval >= 2` to estimate a standard error at all.
     """
     if confidence_z is not None:
         if sensor_noise_std <= 0:
@@ -116,7 +122,9 @@ def optimize_policy(
 
         if confidence_z is not None:
             se_diff = float(np.sqrt(current_se**2 + cand_se**2))
-            improved = (current_score - cand_score) > confidence_z * se_diff
+            df = welch_satterthwaite_df(current_se, noise_trials_per_eval, cand_se, noise_trials_per_eval)
+            t_crit = t_critical_from_z(confidence_z, df)
+            improved = (current_score - cand_score) > t_crit * se_diff
         else:
             improved = cand_score < current_score
 
