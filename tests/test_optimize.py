@@ -6,7 +6,8 @@ from thermal_acoustic.optimize import optimize_policy, optimize_tradeoff_sweep, 
 from thermal_acoustic.policies import linear_ramp_policy
 from thermal_acoustic.robustness import evaluate_robustness
 from thermal_acoustic.simulate import T_AMBIENT_C, T_SAFETY_MAX_C
-from thermal_acoustic.workload import heat_trace
+from thermal_acoustic.workload import heat_trace, sample_heat_trace
+from thermal_acoustic.workload_robustness import evaluate_workload_robustness
 
 
 def test_optimizer_beats_its_own_starting_point_and_stays_safe():
@@ -161,3 +162,63 @@ def test_confidence_z_zero_threshold_matches_reevaluate_incumbent():
     assert confidence.score == reeval.score
     assert confidence.history == reeval.history
     assert np.array_equal(confidence.control_points, reeval.control_points)
+
+
+def test_workload_sampler_is_a_no_op_without_it_set():
+    """Sanity check for the score_stats refactor: passing workload_sampler=None (the
+    default) must reproduce the exact pre-refactor deterministic trajectory -- this
+    pins down that adding workload-distribution support didn't change the plain,
+    noiseless optimization path at all."""
+    heat_w = heat_trace()
+    temp_breakpoints = np.linspace(T_AMBIENT_C, T_SAFETY_MAX_C, 6)
+    baseline = linear_ramp_policy(6)
+
+    result = optimize_policy(temp_breakpoints, heat_w, init=baseline, iterations=200, seed=0)
+    final = evaluate_policy(result.control_points, temp_breakpoints, heat_w)
+    assert not final["safety_violated"]
+    assert final["max_temp_c"] > T_SAFETY_MAX_C - 1.0  # still hugs the wall, as documented
+
+
+def test_confidence_z_works_with_workload_sampler_and_no_sensor_noise():
+    """confidence_z previously required sensor_noise_std > 0; it should also accept
+    a workload_sampler on its own (no sensor noise at all) as a valid source of the
+    stochasticity it needs a standard error from."""
+    heat_w = heat_trace()
+    temp_breakpoints = np.linspace(T_AMBIENT_C, T_SAFETY_MAX_C, 6)
+    baseline = linear_ramp_policy(6)
+
+    result = optimize_policy(
+        temp_breakpoints, heat_w, init=baseline, iterations=20, seed=0,
+        workload_sampler=sample_heat_trace, noise_trials_per_eval=3, confidence_z=1.0,
+    )
+    assert result.control_points.shape == baseline.shape
+
+
+def test_workload_distribution_optimization_generalizes_far_better_than_fixed_trace_tuning():
+    """The core hypothesis this feature exists to test: a policy optimized against the
+    one fixed heat_trace() converges right up against the safety wall for *that* trace
+    (documented in the README), which should make it fragile once the real workload's
+    burst timing/duration/magnitude varies -- exactly the same overfitting story as the
+    sensor-noise section, but for workload uncertainty instead of sensor uncertainty.
+    Optimizing directly against sampled workload draws should generalize far better when
+    evaluated on held-out draws. Reproduces the ~87% -> ~7% drop measured in the README
+    at iterations=500, workload_trials_per_eval=5, reevaluate_incumbent=True, seed=0."""
+    heat_w = heat_trace()
+    temp_breakpoints = np.linspace(T_AMBIENT_C, T_SAFETY_MAX_C, 6)
+    baseline = linear_ramp_policy(6)
+
+    fixed_trace = optimize_policy(temp_breakpoints, heat_w, init=baseline, iterations=500, seed=0)
+    workload_robust = optimize_policy(
+        temp_breakpoints, heat_w, init=baseline, iterations=500, seed=0,
+        workload_sampler=sample_heat_trace, noise_trials_per_eval=5, reevaluate_incumbent=True,
+    )
+
+    fixed_trace_rob = evaluate_workload_robustness(
+        fixed_trace.control_points, temp_breakpoints, n_trials=300, seed=1
+    )
+    workload_robust_rob = evaluate_workload_robustness(
+        workload_robust.control_points, temp_breakpoints, n_trials=300, seed=1
+    )
+
+    assert fixed_trace_rob["safety_violation_rate"] > 0.5
+    assert workload_robust_rob["safety_violation_rate"] < fixed_trace_rob["safety_violation_rate"] - 0.3

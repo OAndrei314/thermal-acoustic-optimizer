@@ -16,6 +16,7 @@ def render_markdown_report(
     pareto_points: list[ParetoPoint] | None = None,
     frontier: list[ParetoPoint] | None = None,
     robustness: dict[str, dict] | None = None,
+    workload_robustness: dict[str, dict] | None = None,
 ) -> str:
     lines = [
         "# Thermal / Acoustic Fan Control Report",
@@ -92,6 +93,36 @@ def render_markdown_report(
                 "",
                 f"({next(iter(robustness.values()))['n_trials']} trials, "
                 f"sensor noise std = {next(iter(robustness.values()))['sensor_noise_std']:.2f} °C)",
+            ]
+        )
+
+    if workload_robustness:
+        lines.extend(
+            [
+                "",
+                "## Workload-Distribution Robustness (Monte Carlo)",
+                "",
+                "The noiseless optimizer and the sensor-noise sections above both tune and",
+                "evaluate against `workload.heat_trace()`, one fixed burst-timing/duration/",
+                "magnitude realization. This section re-evaluates policies against a",
+                "*distribution* of workload traces (`workload.sample_heat_trace`, jittered",
+                "burst start, duration, and magnitude) instead -- the question here is",
+                "whether a policy tuned on the one fixed trace generalizes, or overfits to",
+                "its exact shape.",
+                "",
+                "| policy | violation rate | mean max temp (°C) | worst max temp (°C) |",
+                "| --- | ---: | ---: | ---: |",
+            ]
+        )
+        for name, rob in workload_robustness.items():
+            lines.append(
+                f"| {name} | {rob['safety_violation_rate']:.1%} | "
+                f"{rob['mean_max_temp_c']:.1f} | {rob['worst_max_temp_c']:.1f} |"
+            )
+        lines.extend(
+            [
+                "",
+                f"({next(iter(workload_robustness.values()))['n_trials']} trials)",
             ]
         )
 

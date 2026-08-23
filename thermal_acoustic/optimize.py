@@ -5,6 +5,7 @@ score. Simple, transparent, and enough for a ~5-8 dimensional bounded problem li
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 import numpy as np
 
@@ -42,6 +43,7 @@ def optimize_policy(
     noise_trials_per_eval: int = 5,
     reevaluate_incumbent: bool = False,
     confidence_z: float | None = None,
+    workload_sampler: Callable[[np.random.Generator], np.ndarray] | None = None,
 ) -> OptimizeResult:
     """sensor_noise_std > 0 makes this a *robust* optimization: each candidate is scored
     as the mean over `noise_trials_per_eval` independent noisy-sensor rollouts instead of
@@ -49,6 +51,15 @@ def optimize_policy(
     limit under perfect feedback will, on average, cross the limit on some of those
     rollouts and pick up the safety penalty -- so the search is naturally pushed away from
     the wall, without any explicit margin term in the objective.
+
+    workload_sampler draws each of those `noise_trials_per_eval` rollouts against a fresh,
+    randomly-sampled workload trace (see `workload.sample_heat_trace`) instead of the one
+    fixed `heat_w` passed in -- the same idea applied to workload uncertainty instead of
+    sensor uncertainty, and composable with it: set both to score each candidate against
+    the combination of a random workload draw *and* a noisy sensor reading of it. `heat_w`
+    is still required (it's the fallback when `workload_sampler` is None and it's what the
+    initial-point deterministic score, if ever needed, would use), but is otherwise unused
+    once a sampler is provided.
 
     reevaluate_incumbent (only meaningful when sensor_noise_std > 0): by default the
     incumbent's score is whatever noisy sample happened to win it the last acceptance,
@@ -78,29 +89,33 @@ def optimize_policy(
     stale incumbent's standard error is not comparable to a freshly-drawn candidate's.
     Requires `noise_trials_per_eval >= 2` to estimate a standard error at all.
     """
+    stochastic = sensor_noise_std > 0 or workload_sampler is not None
     if confidence_z is not None:
-        if sensor_noise_std <= 0:
-            raise ValueError("confidence_z requires sensor_noise_std > 0")
+        if not stochastic:
+            raise ValueError("confidence_z requires sensor_noise_std > 0 or a workload_sampler")
         if noise_trials_per_eval < 2:
             raise ValueError("confidence_z requires noise_trials_per_eval >= 2 to estimate a standard error")
 
     rng = np.random.default_rng(seed)
     noise_rng = np.random.default_rng(seed + 1_000_000) if sensor_noise_std > 0 else None
+    workload_rng = np.random.default_rng(seed + 2_000_000) if workload_sampler is not None else None
     n_points = len(init)
 
     def score_stats(control_points: np.ndarray) -> tuple[float, float]:
         """Returns (mean score, standard error of that mean). Standard error is 0.0 in
-        the noiseless case (the score is deterministic) and whenever only one noisy
-        sample was drawn (not enough to estimate a spread)."""
-        if sensor_noise_std <= 0:
+        the fully deterministic case (the score is deterministic) and whenever only one
+        stochastic sample was drawn (not enough to estimate a spread)."""
+        if not stochastic:
             return evaluate_policy(control_points, temp_breakpoints, heat_w, power_weight, noise_weight)["score"], 0.0
-        trial_scores = [
-            evaluate_policy(
-                control_points, temp_breakpoints, heat_w, power_weight, noise_weight,
-                sensor_noise_std=sensor_noise_std, rng=noise_rng,
-            )["score"]
-            for _ in range(noise_trials_per_eval)
-        ]
+        trial_scores = []
+        for _ in range(noise_trials_per_eval):
+            trial_heat_w = workload_sampler(workload_rng) if workload_sampler is not None else heat_w
+            trial_scores.append(
+                evaluate_policy(
+                    control_points, temp_breakpoints, trial_heat_w, power_weight, noise_weight,
+                    sensor_noise_std=sensor_noise_std, rng=noise_rng if sensor_noise_std > 0 else None,
+                )["score"]
+            )
         mean = float(np.mean(trial_scores))
         se = float(np.std(trial_scores, ddof=1) / np.sqrt(len(trial_scores))) if len(trial_scores) > 1 else 0.0
         return mean, se
@@ -111,7 +126,7 @@ def optimize_policy(
     best_score = current_score
     history = [best_score]
 
-    needs_fresh_incumbent = (reevaluate_incumbent or confidence_z is not None) and sensor_noise_std > 0
+    needs_fresh_incumbent = (reevaluate_incumbent or confidence_z is not None) and stochastic
 
     step = initial_step
     for _ in range(iterations):

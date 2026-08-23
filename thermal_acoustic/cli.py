@@ -12,7 +12,8 @@ from .policies import always_on_policy, linear_ramp_policy
 from .report import render_markdown_report
 from .robustness import evaluate_robustness
 from .simulate import T_AMBIENT_C, T_SAFETY_MAX_C
-from .workload import heat_trace
+from .workload import heat_trace, sample_heat_trace
+from .workload_robustness import evaluate_workload_robustness
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -63,6 +64,35 @@ def main(argv: list[str] | None = None) -> int:
         "freshly-resampled incumbent's by more than this many standard errors of the "
         "estimated difference (an approximate significance test, not just 'any "
         "improvement'), and report it alongside the other variants",
+    )
+    parser.add_argument(
+        "--workload-distribution",
+        action="store_true",
+        help="also Monte-Carlo evaluate the fixed-trace-optimized policy's safety against "
+        "randomized workload traces (jittered burst timing/duration/magnitude, see "
+        "workload.sample_heat_trace), and run a second workload-distribution-aware "
+        "optimization pass for comparison",
+    )
+    parser.add_argument(
+        "--workload-trials",
+        type=int,
+        default=200,
+        help="Monte-Carlo trials for the workload-distribution robustness check",
+    )
+    parser.add_argument(
+        "--workload-trials-per-eval",
+        type=int,
+        default=5,
+        help="Monte-Carlo workload samples averaged per candidate score during "
+        "workload-distribution-aware optimization",
+    )
+    parser.add_argument(
+        "--workload-reevaluate-incumbent",
+        action="store_true",
+        help="also run the workload-distribution optimization pass with a fresh-noise "
+        "incumbent re-score each iteration (the same stale-incumbent fix as "
+        "--compare-reevaluate-incumbent, applied to workload-distribution uncertainty "
+        "instead of sensor noise), and report it alongside the plain variant",
     )
     args = parser.parse_args(argv)
 
@@ -177,10 +207,57 @@ def main(argv: list[str] | None = None) -> int:
                 f"{rob['mean_max_temp_c']:<18.1f} {rob['worst_max_temp_c']:<18.1f}"
             )
 
+    workload_robustness = None
+    if args.workload_distribution:
+        workload_robustness = {}
+        workload_robustness["optimized"] = evaluate_workload_robustness(
+            result.control_points, temp_breakpoints,
+            n_trials=args.workload_trials, seed=args.seed,
+        )
+
+        workload_result = optimize_policy(
+            temp_breakpoints, heat_w, init=baselines["linear_ramp"],
+            iterations=args.iterations, seed=args.seed,
+            workload_sampler=sample_heat_trace,
+            noise_trials_per_eval=args.workload_trials_per_eval,
+        )
+        evaluations["workload_robust_optimized"] = evaluate_policy(
+            workload_result.control_points, temp_breakpoints, heat_w
+        )
+        workload_robustness["workload_robust_optimized"] = evaluate_workload_robustness(
+            workload_result.control_points, temp_breakpoints,
+            n_trials=args.workload_trials, seed=args.seed,
+        )
+
+        if args.workload_reevaluate_incumbent:
+            workload_reeval_result = optimize_policy(
+                temp_breakpoints, heat_w, init=baselines["linear_ramp"],
+                iterations=args.iterations, seed=args.seed,
+                workload_sampler=sample_heat_trace,
+                noise_trials_per_eval=args.workload_trials_per_eval,
+                reevaluate_incumbent=True,
+            )
+            evaluations["workload_robust_optimized_reeval"] = evaluate_policy(
+                workload_reeval_result.control_points, temp_breakpoints, heat_w
+            )
+            workload_robustness["workload_robust_optimized_reeval"] = evaluate_workload_robustness(
+                workload_reeval_result.control_points, temp_breakpoints,
+                n_trials=args.workload_trials, seed=args.seed,
+            )
+
+        print("")
+        print(f"workload-distribution robustness ({args.workload_trials} Monte-Carlo trials)")
+        print(f"{'policy':<24} {'violation rate':<15} {'mean max_temp(C)':<18} {'worst max_temp(C)':<18}")
+        for name, rob in workload_robustness.items():
+            print(
+                f"{name:<24} {rob['safety_violation_rate']:<15.1%} "
+                f"{rob['mean_max_temp_c']:<18.1f} {rob['worst_max_temp_c']:<18.1f}"
+            )
+
     if args.report:
         os.makedirs(os.path.dirname(args.report) or ".", exist_ok=True)
         with open(args.report, "w", encoding="utf-8") as f:
-            f.write(render_markdown_report(evaluations, pareto_points, frontier, robustness))
+            f.write(render_markdown_report(evaluations, pareto_points, frontier, robustness, workload_robustness))
     return 0
 
 
