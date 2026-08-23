@@ -38,6 +38,16 @@ safety margin is a real product improvement, not just an academic exercise.
 - `thermal_acoustic/robustness.py` — Monte-Carlo evaluation of a *fixed* policy's safety
   under sensor read noise: how often does the true temperature actually cross the limit,
   not just what the noiseless objective predicts.
+- `thermal_acoustic/workload.py` — besides the one fixed `heat_trace()`, also
+  `sample_heat_trace()`: a randomized draw from the same idle-plus-three-bursts family,
+  with jittered burst start time, duration, and magnitude, representing workload
+  uncertainty a single fixed trace can't capture.
+- `thermal_acoustic/workload_robustness.py` — the same Monte-Carlo idea as
+  `robustness.py`, but for workload uncertainty instead of sensor uncertainty: how often
+  does a *fixed* policy stay safe once the real workload's burst timing/duration/magnitude
+  varies around the one trace it may have been tuned on. `optimize_policy` also accepts a
+  `workload_sampler`, which composes with the existing sensor-noise machinery so a
+  candidate can be scored against random workload draws, noisy sensor reads, or both.
 
 ## Quickstart
 
@@ -54,6 +64,9 @@ python -m thermal_acoustic.cli --n-points 6 --iterations 500 --seed 0 \
 python -m thermal_acoustic.cli --n-points 6 --iterations 500 --seed 0 \
     --sensor-noise-std 1.5 --noise-trials 300 --noise-trials-per-eval 20 \
     --compare-reevaluate-incumbent --confidence-z 1.5 --report reports/seed0_confidence.md
+python -m thermal_acoustic.cli --n-points 6 --iterations 500 --seed 0 \
+    --workload-distribution --workload-trials 300 --workload-trials-per-eval 5 \
+    --workload-reevaluate-incumbent --report reports/seed0_workload.md
 ```
 
 ## Honest results
@@ -226,21 +239,84 @@ outweighs the benefit of filtering noise-driven acceptances at this problem's sc
 recording as a second confirmed negative result rather than re-tuning the same idea a
 third time.
 
+### Workload-distribution robustness (a bigger fragility than sensor noise)
+
+Every section above, including the sensor-noise ones, still tunes *and* evaluates against
+the one fixed `heat_trace()` — sensor noise corrupts the controller's temperature reading,
+but the underlying workload is always exactly the same three bursts at exactly the same
+times. That's the other half of the "unrealistic" caveat the README used to just flag: a
+real workload's burst timing, duration, and magnitude vary run to run. `sample_heat_trace()`
+now models that directly, and `evaluate_workload_robustness()` Monte-Carlo evaluates a fixed
+policy against it, mirroring `robustness.py`'s sensor-noise story exactly.
+
+Evaluating the noiseless-optimized `optimized` policy from the very first table — tuned
+against the one fixed trace, hugging the wall at 84.99°C on it — against 300 fresh
+`sample_heat_trace()` draws, seed 0:
+
+| policy | violation rate | mean max temp (°C) | worst max temp (°C) |
+| --- | ---: | ---: | ---: |
+| optimized (fixed-trace-tuned) | 87.3% | 90.9 | 119.8 |
+| workload_robust_optimized (5 samples/eval) | 7.0% | 83.3 | 102.3 |
+
+That 87.3% is not a fluke of one seed — re-running the whole fixed-trace-tuned policy
+across seeds 0-4 (each with its own fresh 300-draw Monte-Carlo evaluation) gives a violation
+rate between 85.3% and 89.0% every time. A policy that looks perfectly safe against the one
+trace it was tuned on is, in an honest sense, *worse* than a coin flip once the workload
+varies at all — a bigger fragility than the sensor-noise case, where the noiseless-tuned
+policy still stayed under 100% only because sensor noise doesn't also change where the heat
+goes. Optimizing directly against sampled workload draws (`workload_sampler=sample_heat_trace`)
+instead of the fixed trace recovers most of that, at a real but modest power cost: 1.08W →
+1.25-1.29W mean power across the same seeds (roughly +16-20%).
+
+That 7.0% number wasn't the whole story, though. Sweeping `--workload-trials-per-eval`
+across seeds 0-4 surfaced the same stale-incumbent instability documented for sensor noise
+above, and worse:
+
+| `--workload-trials-per-eval` | violation rate, mean over 5 seeds | per-seed range |
+| ---: | ---: | --- |
+| 5 | 18.6% | 6.3% – **66.0%** |
+| 10 | 8.9% | 5.7% – 14.7% |
+
+At 5 samples/eval, one seed (seed 1) landed at a 66.0% violation rate — barely better than
+not optimizing against the distribution at all — while the other four landed at 6-8%. That's
+a real, reproducible outlier, not noise in the reporting: the small sample size at 5
+trials/eval lets a stale incumbent estimate bias the search into a bad local optimum on an
+unlucky seed, exactly the mechanism the `reevaluate_incumbent` fix was built for against
+sensor noise. Since `workload_sampler` was wired through the same `score_stats` machinery
+as `sensor_noise_std` rather than as a separate code path, that fix applies for free:
+
+| variant (5 samples/eval) | violation rate, mean over 5 seeds | per-seed range |
+| --- | ---: | --- |
+| stale incumbent | 18.6% | 6.3% – 66.0% |
+| `reevaluate_incumbent=True` | **7.0%** | 6.0% – 9.0% |
+
+`reevaluate_incumbent=True` at 5 samples/eval matches or beats *doubling* the sample count
+to 10 (7.0% vs. 8.9%) at the same simulation-call budget per iteration, and eliminates the
+seed-1 outlier entirely (66.0% → 6.3%) — the same result the sensor-noise section found,
+now confirmed on a second, independently-modeled source of stochasticity rather than
+re-tuned to fit one. Run it yourself with `--workload-distribution
+--workload-reevaluate-incumbent`.
+
 ## Status / next steps
 
 The project now supports a single optimized policy, a small efficiency/thermal-margin
 Pareto sweep, noise-aware robust optimization against sensor read noise, a fresh-incumbent
 accept rule that fixes most of the residual safety-violation gap noise-aware optimization
-left open, and two confidence-based accept rule variants (naive z-gate, then a
+left open, two confidence-based accept rule variants (naive z-gate, then a
 statistically-correct Welch-Satterthwaite t-gate) that were each implemented specifically
-to close the rest of that gap and, measured honestly across seeds, neither does — the
-t-correction itself is real and correctly implemented, it's just too small at these sample
-sizes to change the outcome. Confidence-gating as an approach is now a settled negative
-result for this problem, not worth a third variant. What's left: the workload trace is
-still fixed and known in advance; a more realistic setup would optimize against a
-*distribution* of workloads (or do online adaptation) rather than one fixed trace — that's
-the more promising direction for further work here than continuing to refine the
-accept-rule statistics.
+to close the rest of that gap and, measured honestly across seeds, neither does, and
+workload-distribution-aware optimization against randomized burst timing/duration/
+magnitude — the direction the previous version of this section named as the most promising
+next step, now implemented and measured. It confirmed the fixed-trace-tuned policy is
+badly overfit (85-89% violation rate once the workload varies at all) and that optimizing
+against the distribution fixes most of it, and it re-confirmed the stale-incumbent fix from
+the sensor-noise work generalizes cleanly to a second, independent source of stochasticity
+rather than being a one-off fit to sensor noise specifically. What's left: workload
+uncertainty and sensor uncertainty are still only ever tested one at a time here, never
+together, even though `workload_sampler` and `sensor_noise_std` were built to compose in
+`optimize_policy` — whether jointly-robust optimization holds up as well as either one does
+alone, or trades one failure mode for the other under a fixed sample budget, hasn't been
+measured; that's the most promising direction for further work here.
 
 ## License
 

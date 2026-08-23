@@ -7,6 +7,7 @@ from thermal_acoustic.report import render_markdown_report
 from thermal_acoustic.robustness import evaluate_robustness
 from thermal_acoustic.simulate import T_AMBIENT_C, T_SAFETY_MAX_C
 from thermal_acoustic.workload import heat_trace
+from thermal_acoustic.workload_robustness import evaluate_workload_robustness
 
 
 def test_report_includes_pareto_sweep_when_provided():
@@ -62,3 +63,22 @@ def test_report_includes_robustness_section_when_provided():
 
     assert "Sensor-Noise Robustness" in report
     assert "violation rate" in report
+
+
+def test_report_includes_workload_distribution_section_when_provided():
+    heat_w = heat_trace()
+    temp_breakpoints = np.linspace(T_AMBIENT_C, T_SAFETY_MAX_C, 6)
+    optimized = optimize_policy(
+        temp_breakpoints, heat_w, init=linear_ramp_policy(6), iterations=100, seed=0,
+    )
+    evaluations = {"optimized": evaluate_policy(optimized.control_points, temp_breakpoints, heat_w)}
+    workload_robustness = {
+        "optimized": evaluate_workload_robustness(
+            optimized.control_points, temp_breakpoints, n_trials=30, seed=0,
+        )
+    }
+
+    report = render_markdown_report(evaluations, workload_robustness=workload_robustness)
+
+    assert "Workload-Distribution Robustness" in report
+    assert "sample_heat_trace" in report
