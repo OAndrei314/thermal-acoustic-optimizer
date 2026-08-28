@@ -6,6 +6,7 @@ import os
 
 import numpy as np
 
+from .joint_robustness import evaluate_joint_robustness
 from .objective import evaluate_policy
 from .optimize import optimize_policy, optimize_tradeoff_sweep, pareto_frontier
 from .policies import always_on_policy, linear_ramp_policy
@@ -94,7 +95,25 @@ def main(argv: list[str] | None = None) -> int:
         "--compare-reevaluate-incumbent, applied to workload-distribution uncertainty "
         "instead of sensor noise), and report it alongside the plain variant",
     )
+    parser.add_argument(
+        "--joint-robustness",
+        action="store_true",
+        help="requires --sensor-noise-std > 0 and --workload-distribution: Monte-Carlo "
+        "evaluate policies under sensor noise AND workload variation together in the "
+        "same trial (not one axis at a time), including a new jointly-robust-optimized "
+        "policy trained against both sources of uncertainty at once",
+    )
+    parser.add_argument(
+        "--joint-trials-per-eval",
+        type=int,
+        default=20,
+        help="Monte-Carlo samples averaged per candidate score during jointly-robust "
+        "optimization; each sample draws both a random workload trace and noisy "
+        "sensor reads",
+    )
     args = parser.parse_args(argv)
+    if args.joint_robustness and not (args.sensor_noise_std > 0 and args.workload_distribution):
+        parser.error("--joint-robustness requires --sensor-noise-std > 0 and --workload-distribution")
 
     temp_breakpoints = np.linspace(T_AMBIENT_C, T_SAFETY_MAX_C, args.n_points)
     heat_w = heat_trace()
@@ -254,10 +273,58 @@ def main(argv: list[str] | None = None) -> int:
                 f"{rob['mean_max_temp_c']:<18.1f} {rob['worst_max_temp_c']:<18.1f}"
             )
 
+    joint_robustness = None
+    if args.joint_robustness:
+        joint_result = optimize_policy(
+            temp_breakpoints, heat_w, init=baselines["linear_ramp"],
+            iterations=args.iterations, seed=args.seed,
+            sensor_noise_std=args.sensor_noise_std,
+            workload_sampler=sample_heat_trace,
+            noise_trials_per_eval=args.joint_trials_per_eval,
+            reevaluate_incumbent=True,
+        )
+        evaluations["jointly_robust_optimized"] = evaluate_policy(
+            joint_result.control_points, temp_breakpoints, heat_w
+        )
+
+        joint_robustness = {}
+        joint_robustness["optimized"] = evaluate_joint_robustness(
+            result.control_points, temp_breakpoints,
+            sensor_noise_std=args.sensor_noise_std, n_trials=args.noise_trials, seed=args.seed,
+        )
+        joint_robustness["sensor_robust_optimized"] = evaluate_joint_robustness(
+            robust_result.control_points, temp_breakpoints,
+            sensor_noise_std=args.sensor_noise_std, n_trials=args.noise_trials, seed=args.seed,
+        )
+        joint_robustness["workload_robust_optimized"] = evaluate_joint_robustness(
+            workload_result.control_points, temp_breakpoints,
+            sensor_noise_std=args.sensor_noise_std, n_trials=args.noise_trials, seed=args.seed,
+        )
+        joint_robustness["jointly_robust_optimized"] = evaluate_joint_robustness(
+            joint_result.control_points, temp_breakpoints,
+            sensor_noise_std=args.sensor_noise_std, n_trials=args.noise_trials, seed=args.seed,
+        )
+
+        print("")
+        print(
+            f"joint sensor+workload robustness ({args.noise_trials} Monte-Carlo trials, "
+            f"sensor noise std = {args.sensor_noise_std:.2f} degC)"
+        )
+        print(f"{'policy':<24} {'violation rate':<15} {'mean max_temp(C)':<18} {'worst max_temp(C)':<18}")
+        for name, rob in joint_robustness.items():
+            print(
+                f"{name:<24} {rob['safety_violation_rate']:<15.1%} "
+                f"{rob['mean_max_temp_c']:<18.1f} {rob['worst_max_temp_c']:<18.1f}"
+            )
+
     if args.report:
         os.makedirs(os.path.dirname(args.report) or ".", exist_ok=True)
         with open(args.report, "w", encoding="utf-8") as f:
-            f.write(render_markdown_report(evaluations, pareto_points, frontier, robustness, workload_robustness))
+            f.write(
+                render_markdown_report(
+                    evaluations, pareto_points, frontier, robustness, workload_robustness, joint_robustness
+                )
+            )
     return 0
 
 
