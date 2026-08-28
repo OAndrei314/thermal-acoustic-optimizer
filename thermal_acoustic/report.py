@@ -17,6 +17,7 @@ def render_markdown_report(
     frontier: list[ParetoPoint] | None = None,
     robustness: dict[str, dict] | None = None,
     workload_robustness: dict[str, dict] | None = None,
+    joint_robustness: dict[str, dict] | None = None,
 ) -> str:
     lines = [
         "# Thermal / Acoustic Fan Control Report",
@@ -123,6 +124,36 @@ def render_markdown_report(
             [
                 "",
                 f"({next(iter(workload_robustness.values()))['n_trials']} trials)",
+            ]
+        )
+
+    if joint_robustness:
+        lines.extend(
+            [
+                "",
+                "## Joint Sensor+Workload Robustness (Monte Carlo)",
+                "",
+                "The two sections above each Monte-Carlo one source of uncertainty at a",
+                "time, holding the other fixed. This section draws both a random workload",
+                "trace *and* noisy sensor reads on every trial, so both failure modes are",
+                "active simultaneously -- the question is whether a policy made robust to",
+                "one axis alone stays robust once both are live at once, or trades one",
+                "failure mode for the other.",
+                "",
+                "| policy | violation rate | mean max temp (°C) | worst max temp (°C) |",
+                "| --- | ---: | ---: | ---: |",
+            ]
+        )
+        for name, rob in joint_robustness.items():
+            lines.append(
+                f"| {name} | {rob['safety_violation_rate']:.1%} | "
+                f"{rob['mean_max_temp_c']:.1f} | {rob['worst_max_temp_c']:.1f} |"
+            )
+        lines.extend(
+            [
+                "",
+                f"({next(iter(joint_robustness.values()))['n_trials']} trials, "
+                f"sensor noise std = {next(iter(joint_robustness.values()))['sensor_noise_std']:.2f} °C)",
             ]
         )
 

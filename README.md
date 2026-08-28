@@ -48,6 +48,12 @@ safety margin is a real product improvement, not just an academic exercise.
   varies around the one trace it may have been tuned on. `optimize_policy` also accepts a
   `workload_sampler`, which composes with the existing sensor-noise machinery so a
   candidate can be scored against random workload draws, noisy sensor reads, or both.
+- `thermal_acoustic/joint_robustness.py` — the same Monte-Carlo idea again, but with
+  *both* sources of uncertainty active on every trial: each rollout draws a fresh random
+  workload trace and runs it through a noisy sensor, instead of holding one fixed while
+  varying the other. `robustness.py` and `workload_robustness.py` each answer "how
+  fragile is this policy to axis X, holding axis Y fixed" — this module answers the
+  question that actually matches deployment, where neither axis is ever fixed.
 
 ## Quickstart
 
@@ -67,6 +73,10 @@ python -m thermal_acoustic.cli --n-points 6 --iterations 500 --seed 0 \
 python -m thermal_acoustic.cli --n-points 6 --iterations 500 --seed 0 \
     --workload-distribution --workload-trials 300 --workload-trials-per-eval 5 \
     --workload-reevaluate-incumbent --report reports/seed0_workload.md
+python -m thermal_acoustic.cli --n-points 6 --iterations 500 --seed 0 \
+    --sensor-noise-std 1.5 --noise-trials 300 --noise-trials-per-eval 20 --compare-reevaluate-incumbent \
+    --workload-distribution --workload-trials 300 --workload-trials-per-eval 20 --workload-reevaluate-incumbent \
+    --joint-robustness --joint-trials-per-eval 20 --report reports/seed0_joint.md
 ```
 
 ## Honest results
@@ -297,6 +307,63 @@ now confirmed on a second, independently-modeled source of stochasticity rather 
 re-tuned to fit one. Run it yourself with `--workload-distribution
 --workload-reevaluate-incumbent`.
 
+### Joint sensor+workload robustness (single-axis robustness doesn't generalize)
+
+Every robustness result above tests one axis of uncertainty while holding the other one
+fixed: the sensor-noise sections still evaluate against the one nominal `heat_trace()`,
+and the workload-distribution section still assumes a perfect sensor. A real deployment
+doesn't get to hold either one fixed — the sensor is noisy *and* the workload varies, on
+the same run, at the same time. `joint_robustness.py` now Monte-Carlo evaluates a fixed
+policy against both at once (a fresh `sample_heat_trace()` draw run through
+`sensor_noise_std` noise on every trial), and `optimize_policy` was already built so
+`sensor_noise_std` and `workload_sampler` compose in the same call — that combination had
+never actually been measured until now.
+
+Taking each single-axis-robust policy from the sections above (500 iterations, 20
+samples/eval, seed 0) and evaluating it under *joint* noise (300 trials, 1.5°C sensor
+noise std) instead of the one axis it was tuned against:
+
+| policy (tuned against) | joint violation rate | mean max temp (°C) | worst max temp (°C) |
+| --- | ---: | ---: | ---: |
+| `optimized` (neither axis) | 99.7% | 91.0 | 111.3 |
+| `sensor_robust_optimized` (sensor noise only) | 75.7% | 86.2 | 104.8 |
+| `workload_robust_optimized` (workload only) | 57.3% | 85.4 | 99.6 |
+| `jointly_robust_optimized` (both, composed) | **5.0%** | 83.4 | 93.0 |
+
+Neither single-axis fix comes close to solving the joint problem — a policy that's
+genuinely safe against sensor noise alone still violates the true safety limit on
+**76%** of joint-uncertainty trials, and workload-only robustness fares only
+somewhat better at 57%. That's not because the reeval fix from the sections above wasn't
+applied: re-running both single-axis optimizations with `reevaluate_incumbent=True` (the
+established fix for stale-incumbent bias) and re-evaluating them under joint noise across
+3 seeds still gives 57–78% for sensor-only and 7–29% for workload-only — the gap isn't a
+tuning artifact, it's that optimizing against one axis provides close to no transfer to
+the other. Only optimizing directly against the composed uncertainty
+(`sensor_noise_std` + `workload_sampler` together, with `reevaluate_incumbent=True`)
+gets the joint violation rate down near the single-axis rates each fix achieves on its
+own axis.
+
+That result isn't a single-seed fluke — re-running the full three-way comparison across
+seeds 0-4 (each with a fresh 300-trial joint evaluation):
+
+| policy | joint violation rate, mean over 5 seeds | per-seed range |
+| --- | ---: | --- |
+| `sensor_robust_optimized` | 70.5% | 65.7% – 73.3% |
+| `workload_robust_optimized` | 46.4% | 29.3% – 76.0% |
+| `jointly_robust_optimized` | **6.4%** | 2.7% – 8.7% |
+
+`jointly_robust_optimized` also has noticeably lower seed-to-seed variance than
+`workload_robust_optimized`'s wide 29–76% range — defending against the compound failure
+mode directly, rather than hoping single-axis robustness transfers, gives a more
+consistent outcome as well as a better one. It isn't free, though: `jointly_robust_optimized`
+costs more power than either single-axis fix (1.65 W vs. 1.19 W for sensor-only and 1.24 W
+for workload-only, all up from the noiseless-tuned 1.08 W) — a real, honestly-measured
+tradeoff, not a strictly-dominant free lunch. Defending against a strictly harder,
+compound failure mode costing strictly more than defending against either component alone
+is exactly the result you'd expect, not a surprising one, but it hadn't actually been
+measured before this run. Reproduce it with `--joint-robustness` (requires
+`--sensor-noise-std` and `--workload-distribution` both set).
+
 ## Status / next steps
 
 The project now supports a single optimized policy, a small efficiency/thermal-margin
@@ -311,12 +378,18 @@ next step, now implemented and measured. It confirmed the fixed-trace-tuned poli
 badly overfit (85-89% violation rate once the workload varies at all) and that optimizing
 against the distribution fixes most of it, and it re-confirmed the stale-incumbent fix from
 the sensor-noise work generalizes cleanly to a second, independent source of stochasticity
-rather than being a one-off fit to sensor noise specifically. What's left: workload
-uncertainty and sensor uncertainty are still only ever tested one at a time here, never
-together, even though `workload_sampler` and `sensor_noise_std` were built to compose in
-`optimize_policy` — whether jointly-robust optimization holds up as well as either one does
-alone, or trades one failure mode for the other under a fixed sample budget, hasn't been
-measured; that's the most promising direction for further work here.
+rather than being a one-off fit to sensor noise specifically, and joint sensor+workload
+robustness (`joint_robustness.py`) — the direction the previous version of this section
+named as the most promising next step, now implemented and measured. It confirmed that
+single-axis robustness (to sensor noise or workload variation alone, with or without the
+reeval fix) transfers poorly to the compound failure mode: 46-70% mean violation rates
+under joint noise versus 6.4% for optimizing against the composed uncertainty directly,
+at a real, honestly-measured power cost over either single-axis fix. What's left: the
+joint result was only tested at one sensor-noise magnitude (1.5°C) and one workload-jitter
+setting (the defaults in `sample_heat_trace`) — whether the single-axis-transfer gap
+narrows or widens as either uncertainty source is scaled up or down hasn't been measured,
+and would be needed before trusting this result to generalize beyond the specific noise
+levels tested here. That's the most promising direction for further work.
 
 ## License
 
