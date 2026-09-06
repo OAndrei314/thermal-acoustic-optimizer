@@ -24,11 +24,12 @@ def evaluate_joint_robustness(
     sensor_noise_std: float,
     n_trials: int = 200,
     seed: int = 0,
+    jitter_scale: float = 1.0,
 ) -> dict:
-    """Each trial draws a fresh random workload trace (`workload.sample_heat_trace`)
-    *and* runs it with additive Gaussian sensor read noise, so both sources of
-    uncertainty are active on every single rollout rather than being evaluated
-    independently."""
+    """Each trial draws a fresh random workload trace (`workload.sample_heat_trace`,
+    scaled by `jitter_scale`) *and* runs it with additive Gaussian sensor read noise, so
+    both sources of uncertainty are active on every single rollout rather than being
+    evaluated independently."""
     if sensor_noise_std <= 0:
         raise ValueError("evaluate_joint_robustness needs sensor_noise_std > 0; use "
                           "evaluate_workload_robustness for the perfect-sensor case")
@@ -42,7 +43,7 @@ def evaluate_joint_robustness(
     violations = 0
 
     for i in range(n_trials):
-        heat_w = sample_heat_trace(rng)
+        heat_w = sample_heat_trace(rng, jitter_scale=jitter_scale)
         result = simulate_policy(
             control_points, temp_breakpoints, heat_w,
             sensor_noise_std=sensor_noise_std, rng=rng,

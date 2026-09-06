@@ -99,3 +99,25 @@ def test_jointly_robust_optimization_beats_single_axis_robust_policies_under_joi
 
     assert jointly_robust_joint["safety_violation_rate"] <= sensor_robust_joint["safety_violation_rate"] + 0.05
     assert jointly_robust_joint["safety_violation_rate"] <= workload_robust_joint["safety_violation_rate"] + 0.05
+
+
+def test_evaluate_joint_robustness_jitter_scale_zero_only_leaves_sensor_noise_active():
+    """jitter_scale=0 removes workload uncertainty, so evaluating a policy tuned only
+    against the fixed trace and a perfect sensor should give a violation rate that
+    matches plain sensor-noise robustness (evaluate_robustness on the fixed trace), not
+    the (much higher) violation rate joint evaluation shows at the default jitter_scale."""
+    heat_w = heat_trace()
+    temp_breakpoints = np.linspace(T_AMBIENT_C, T_SAFETY_MAX_C, 6)
+    sensor_noise_std = 1.5
+    noiseless = optimize_policy(temp_breakpoints, heat_w, init=linear_ramp_policy(6), iterations=300, seed=0)
+
+    sensor_only = evaluate_robustness(
+        noiseless.control_points, temp_breakpoints, heat_w,
+        sensor_noise_std=sensor_noise_std, n_trials=300, seed=5,
+    )
+    joint_no_jitter = evaluate_joint_robustness(
+        noiseless.control_points, temp_breakpoints,
+        sensor_noise_std=sensor_noise_std, n_trials=300, seed=5, jitter_scale=0.0,
+    )
+
+    assert abs(joint_no_jitter["safety_violation_rate"] - sensor_only["safety_violation_rate"]) < 0.05

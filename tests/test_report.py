@@ -8,6 +8,7 @@ from thermal_acoustic.robustness import evaluate_robustness
 from thermal_acoustic.simulate import T_AMBIENT_C, T_SAFETY_MAX_C
 from thermal_acoustic.workload import heat_trace
 from thermal_acoustic.joint_robustness import evaluate_joint_robustness
+from thermal_acoustic.uncertainty_sweep import UncertaintyScalePoint
 from thermal_acoustic.workload_robustness import evaluate_workload_robustness
 
 
@@ -103,3 +104,34 @@ def test_report_includes_joint_robustness_section_when_provided():
 
     assert "Joint Sensor+Workload Robustness" in report
     assert "violation rate" in report
+
+
+def test_report_includes_uncertainty_scale_sweep_section_when_provided():
+    heat_w = heat_trace()
+    temp_breakpoints = np.linspace(T_AMBIENT_C, T_SAFETY_MAX_C, 6)
+    optimized = optimize_policy(
+        temp_breakpoints, heat_w, init=linear_ramp_policy(6), iterations=100, seed=0,
+    )
+    evaluations = {"optimized": evaluate_policy(optimized.control_points, temp_breakpoints, heat_w)}
+    uncertainty_scale_points = [
+        UncertaintyScalePoint(
+            scale=0.5,
+            sensor_noise_std=0.75,
+            sensor_robust_violation_rate=0.30,
+            workload_robust_violation_rate=0.20,
+            jointly_robust_violation_rate=0.02,
+        ),
+        UncertaintyScalePoint(
+            scale=1.0,
+            sensor_noise_std=1.5,
+            sensor_robust_violation_rate=0.70,
+            workload_robust_violation_rate=0.46,
+            jointly_robust_violation_rate=0.06,
+        ),
+    ]
+
+    report = render_markdown_report(evaluations, uncertainty_scale_points=uncertainty_scale_points)
+
+    assert "Uncertainty-Scale Sweep" in report
+    assert "transfer gap" in report
+    assert "40.0%" in report  # scale=1.0's transfer gap: 0.46 - 0.06

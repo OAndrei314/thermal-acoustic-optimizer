@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .optimize import ParetoPoint
+from .uncertainty_sweep import UncertaintyScalePoint
 
 
 def _policy_row(name: str, ev: dict) -> str:
@@ -18,6 +19,7 @@ def render_markdown_report(
     robustness: dict[str, dict] | None = None,
     workload_robustness: dict[str, dict] | None = None,
     joint_robustness: dict[str, dict] | None = None,
+    uncertainty_scale_points: list[UncertaintyScalePoint] | None = None,
 ) -> str:
     lines = [
         "# Thermal / Acoustic Fan Control Report",
@@ -154,6 +156,41 @@ def render_markdown_report(
                 "",
                 f"({next(iter(joint_robustness.values()))['n_trials']} trials, "
                 f"sensor noise std = {next(iter(joint_robustness.values()))['sensor_noise_std']:.2f} °C)",
+            ]
+        )
+
+    if uncertainty_scale_points:
+        lines.extend(
+            [
+                "",
+                "## Uncertainty-Scale Sweep",
+                "",
+                "The joint-robustness section above was only ever measured at one sensor-noise",
+                "magnitude and one workload-jitter magnitude. This sweep scales both together",
+                "(scale=1.0 reproduces that section's magnitude exactly) and re-runs the",
+                "sensor-robust / workload-robust / jointly-robust three-way comparison at each",
+                "scale, to see whether the single-axis-transfer gap is a generic property of",
+                "compounding two failure modes or an artifact of the one magnitude tested before.",
+                "",
+                "| scale | sensor std (°C) | sensor-robust | workload-robust | jointly-robust | transfer gap |",
+                "| ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for point in uncertainty_scale_points:
+            lines.append(
+                f"| {point.scale:g} | {point.sensor_noise_std:.2f} | "
+                f"{point.sensor_robust_violation_rate:.1%} | "
+                f"{point.workload_robust_violation_rate:.1%} | "
+                f"{point.jointly_robust_violation_rate:.1%} | "
+                f"{point.transfer_gap:.1%} |"
+            )
+        lines.extend(
+            [
+                "",
+                "\"transfer gap\" is the best single-axis-robust policy's violation rate minus",
+                "the jointly-robust policy's, at that scale -- how much single-axis robustness",
+                "leaves on the table relative to defending against the compound failure mode",
+                "directly.",
             ]
         )
 

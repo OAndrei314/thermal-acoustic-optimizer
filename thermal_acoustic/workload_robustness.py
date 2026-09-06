@@ -20,6 +20,7 @@ def evaluate_workload_robustness(
     temp_breakpoints: np.ndarray,
     n_trials: int = 200,
     seed: int = 0,
+    jitter_scale: float = 1.0,
 ) -> dict:
     if n_trials < 1:
         raise ValueError("n_trials must be >= 1")
@@ -31,7 +32,7 @@ def evaluate_workload_robustness(
     violations = 0
 
     for i in range(n_trials):
-        heat_w = sample_heat_trace(rng)
+        heat_w = sample_heat_trace(rng, jitter_scale=jitter_scale)
         ev = evaluate_policy(control_points, temp_breakpoints, heat_w)
         max_temps[i] = ev["max_temp_c"]
         powers[i] = ev["mean_power_w"]
