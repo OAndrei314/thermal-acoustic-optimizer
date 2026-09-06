@@ -138,6 +138,46 @@ def test_cli_joint_robustness_runs_and_reports_the_jointly_robust_variant(tmp_pa
     assert "Joint Sensor+Workload Robustness" in report
 
 
+def test_cli_uncertainty_scale_sweep_requires_sensor_noise_std():
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--uncertainty-scale-sweep"])
+    assert exc_info.value.code != 0
+
+
+def test_cli_uncertainty_scale_sweep_runs_and_reports_each_scale(tmp_path, capsys):
+    report_path = tmp_path / "report.md"
+    exit_code = main(
+        [
+            "--n-points",
+            "6",
+            "--iterations",
+            "30",
+            "--seed",
+            "0",
+            "--sensor-noise-std",
+            "1.5",
+            "--noise-trials",
+            "20",
+            "--joint-trials-per-eval",
+            "3",
+            "--uncertainty-scale-sweep",
+            "--uncertainty-scales",
+            "0.5,1.5",
+            "--report",
+            str(report_path),
+        ]
+    )
+
+    assert exit_code == 0
+    printed = capsys.readouterr().out
+    assert "uncertainty-scale sweep" in printed
+    assert "0.5" in printed and "1.5" in printed
+
+    report = report_path.read_text()
+    assert "Uncertainty-Scale Sweep" in report
+    assert "transfer gap" in report
+
+
 def test_cli_workload_reevaluate_incumbent_reports_both_variants(tmp_path, capsys):
     report_path = tmp_path / "report.md"
     exit_code = main(

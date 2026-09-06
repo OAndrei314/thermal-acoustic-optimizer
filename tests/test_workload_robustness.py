@@ -34,3 +34,22 @@ def test_always_on_policy_is_far_more_robust_than_a_wall_hugging_policy():
     temp_breakpoints = np.linspace(T_AMBIENT_C, T_SAFETY_MAX_C, 6)
     rob = evaluate_workload_robustness(always_on_policy(6), temp_breakpoints, n_trials=300, seed=0)
     assert rob["safety_violation_rate"] < 0.05
+
+
+def test_evaluate_workload_robustness_jitter_scale_zero_matches_the_fixed_trace_evaluation():
+    """jitter_scale=0 collapses sample_heat_trace onto the fixed heat_trace() exactly, so
+    Monte-Carlo evaluation against it should reproduce the deterministic single-trace
+    evaluation (every trial is now the same trace), unlike jitter_scale=1.0's spread of
+    outcomes."""
+    from thermal_acoustic.objective import evaluate_policy
+    from thermal_acoustic.workload import heat_trace
+
+    temp_breakpoints = np.linspace(T_AMBIENT_C, T_SAFETY_MAX_C, 6)
+    cp = linear_ramp_policy(6)
+
+    rob = evaluate_workload_robustness(cp, temp_breakpoints, n_trials=20, seed=0, jitter_scale=0.0)
+    deterministic = evaluate_policy(cp, temp_breakpoints, heat_trace())
+
+    assert rob["mean_max_temp_c"] == pytest.approx(deterministic["max_temp_c"])
+    assert rob["worst_max_temp_c"] == pytest.approx(deterministic["max_temp_c"])
+    assert rob["safety_violation_rate"] in (0.0, 1.0)

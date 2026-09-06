@@ -77,6 +77,10 @@ python -m thermal_acoustic.cli --n-points 6 --iterations 500 --seed 0 \
     --sensor-noise-std 1.5 --noise-trials 300 --noise-trials-per-eval 20 --compare-reevaluate-incumbent \
     --workload-distribution --workload-trials 300 --workload-trials-per-eval 20 --workload-reevaluate-incumbent \
     --joint-robustness --joint-trials-per-eval 20 --report reports/seed0_joint.md
+python -m thermal_acoustic.cli --n-points 6 --iterations 500 --seed 0 \
+    --sensor-noise-std 1.5 --noise-trials 300 --joint-trials-per-eval 20 \
+    --uncertainty-scale-sweep --uncertainty-scales 0.5,1,1.5,2 \
+    --report reports/seed0_uncertainty_scale.md
 ```
 
 ## Honest results
@@ -364,6 +368,66 @@ is exactly the result you'd expect, not a surprising one, but it hadn't actually
 measured before this run. Reproduce it with `--joint-robustness` (requires
 `--sensor-noise-std` and `--workload-distribution` both set).
 
+### Does the single-axis-transfer gap grow or shrink with the amount of uncertainty?
+
+The joint-robustness result above was only ever measured at one sensor-noise magnitude
+(1.5°C std) and one workload-jitter magnitude (`sample_heat_trace`'s defaults) — so it
+shows that single-axis robustness doesn't transfer *at that specific amount of
+uncertainty*, but not whether the gap is a generic property of compounding two failure
+modes or an artifact of those two particular magnitudes happening to interact badly. That
+was this section's own next-step question, and it's now answered:
+`workload.sample_heat_trace` takes a `jitter_scale` parameter that scales its
+start-time/duration/magnitude jitter uniformly (`jitter_scale=0` collapses it back onto
+the exact fixed `heat_trace()`, `jitter_scale=1` reproduces the defaults used everywhere
+above), and `uncertainty_sweep.sweep_uncertainty_scale` re-runs the sensor-robust /
+workload-robust / jointly-robust three-way comparison from the previous section at
+several uncertainty scales, moving `--sensor-noise-std` and the workload jitter magnitude
+together so "uncertainty scale" means the same relative thing on both axes.
+
+A single seed (seed 0, scale=1.0 reproducing the exact 1.5°C/default-jitter setting from
+the previous section) already hinted the gap isn't monotonic — but this repo's own history
+of workload-robustness numbers swinging 29–76% across seeds at one fixed setting is a
+standing warning not to trust a single-seed sweep, so this was re-run across seeds 0-3,
+500 iterations, 20 samples/eval, 300 joint-evaluation trials per point:
+
+| scale | sensor std (°C) | sensor-robust (mean) | workload-robust (mean) | jointly-robust (mean) | transfer gap (mean) | gap range |
+| ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 0.5 | 0.75 | 48.2% | 57.1% | 5.3% | 35.6% | 31.7% – 39.7% |
+| 1.0 | 1.50 | 67.8% | 10.7% | 5.2% | 5.5% | -1.0% – 20.7% |
+| 1.5 | 2.25 | 74.9% | 25.8% | 12.1% | 13.7% | -0.7% – 36.0% |
+| 2.0 | 3.00 | 81.7% | 45.2% | 19.8% | 24.4% | 2.0% – 63.3% |
+
+("transfer gap" is the best single-axis-robust policy's violation rate minus the
+jointly-robust policy's — how much single-axis robustness leaves on the table relative to
+optimizing against the compound failure mode directly.)
+
+Two honest findings, not the one the single-seed run suggested:
+
+1. **The jointly-robust policy's own violation rate climbs steadily with scale** (5.3% →
+   5.2% → 12.1% → 19.8%) — defending against the compound failure mode directly still
+   degrades as the underlying uncertainty grows, it just degrades far more slowly than
+   either single-axis policy does (sensor-robust: 48% → 82%; workload-robust: 57% → 45%,
+   itself non-monotonic).
+2. **The transfer gap is not monotonic in scale, and the per-seed range is wide enough
+   that the single-seed run's 63.3%-at-scale-2.0 result was on the high tail, not the
+   mean** (24.4%). The gap is largest at the two ends tested here (scale 0.5 and scale
+   2.0) and smallest around scale 1.0-1.5, with individual seeds at scale 1.0 and 1.5
+   occasionally showing jointly-robust doing *slightly worse* than the better single-axis
+   policy (negative gap) — within noise at 300 trials/seed, not a sign single-axis
+   robustness ever reliably beats joint training.
+
+The practical takeaway carries over even though the exact shape doesn't: at every scale
+tested, from a quarter to double the originally-measured uncertainty magnitude, optimizing
+against the composed uncertainty directly matched or beat the better of the two
+single-axis policies on every single seed. The magnitude of that advantage genuinely
+varies with how much uncertainty is present, and this sweep doesn't have enough seeds or
+scale resolution to characterize *why* the gap dips around scale 1.0-1.5 rather than
+falling or rising monotonically — that would need more seeds per point (variance at this
+sample size is clearly still large relative to the effect between adjacent scales) before
+trusting the dip itself rather than just the qualitative "jointly-robust wins everywhere"
+result. Reproduce it with `--uncertainty-scale-sweep --uncertainty-scales <comma-list>`
+(requires `--sensor-noise-std > 0`).
+
 ## Status / next steps
 
 The project now supports a single optimized policy, a small efficiency/thermal-margin
@@ -379,17 +443,28 @@ badly overfit (85-89% violation rate once the workload varies at all) and that o
 against the distribution fixes most of it, and it re-confirmed the stale-incumbent fix from
 the sensor-noise work generalizes cleanly to a second, independent source of stochasticity
 rather than being a one-off fit to sensor noise specifically, and joint sensor+workload
-robustness (`joint_robustness.py`) — the direction the previous version of this section
-named as the most promising next step, now implemented and measured. It confirmed that
-single-axis robustness (to sensor noise or workload variation alone, with or without the
-reeval fix) transfers poorly to the compound failure mode: 46-70% mean violation rates
-under joint noise versus 6.4% for optimizing against the composed uncertainty directly,
-at a real, honestly-measured power cost over either single-axis fix. What's left: the
-joint result was only tested at one sensor-noise magnitude (1.5°C) and one workload-jitter
-setting (the defaults in `sample_heat_trace`) — whether the single-axis-transfer gap
-narrows or widens as either uncertainty source is scaled up or down hasn't been measured,
-and would be needed before trusting this result to generalize beyond the specific noise
-levels tested here. That's the most promising direction for further work.
+robustness (`joint_robustness.py`) confirmed that single-axis robustness (to sensor noise
+or workload variation alone, with or without the reeval fix) transfers poorly to the
+compound failure mode: 46-70% mean violation rates under joint noise versus 6.4% for
+optimizing against the composed uncertainty directly, at a real, honestly-measured power
+cost over either single-axis fix — but that result was only measured at one sensor-noise
+magnitude and one workload-jitter magnitude, which the previous version of this section
+named as the most promising next step. An uncertainty-scale sweep
+(`uncertainty_sweep.py`, `--uncertainty-scale-sweep`) now answers it: jointly-robust
+optimization matches or beats the better single-axis policy at every scale tested (0.5x
+to 2x the original magnitude, on every seed), so the qualitative result generalizes: but
+the size of that advantage is *not* monotonic in the uncertainty magnitude the way a first
+guess might expect, and per-seed variance at this sample size (4 seeds, 300 eval trials
+each) is large enough that the exact shape of that curve isn't trustworthy yet, only its
+sign. What's left: characterizing the non-monotonic transfer-gap curve properly would need
+more seeds per scale point and finer scale resolution than tested here, and this sweep
+only ever moves both uncertainty axes together (`jitter_scale` and `--sensor-noise-std`
+scaled by the same factor) — whether the same qualitative result (jointly-robust wins
+everywhere) holds when the two axes are scaled *independently* (e.g. high sensor noise
+with low workload jitter, or vice versa) hasn't been tested and would be a more direct
+test of whether "jointly-robust wins everywhere" is a property of compounding uncertainty
+in general, or specific to moving both axes in lockstep. That's the most promising
+direction for further work.
 
 ## License
 

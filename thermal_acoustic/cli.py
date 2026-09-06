@@ -13,6 +13,7 @@ from .policies import always_on_policy, linear_ramp_policy
 from .report import render_markdown_report
 from .robustness import evaluate_robustness
 from .simulate import T_AMBIENT_C, T_SAFETY_MAX_C
+from .uncertainty_sweep import sweep_uncertainty_scale
 from .workload import heat_trace, sample_heat_trace
 from .workload_robustness import evaluate_workload_robustness
 
@@ -111,9 +112,26 @@ def main(argv: list[str] | None = None) -> int:
         "optimization; each sample draws both a random workload trace and noisy "
         "sensor reads",
     )
+    parser.add_argument(
+        "--uncertainty-scale-sweep",
+        action="store_true",
+        help="requires --sensor-noise-std > 0: re-run the sensor-robust/workload-robust/"
+        "jointly-robust three-way comparison from --joint-robustness at several "
+        "uncertainty magnitudes (scaling --sensor-noise-std and the workload jitter "
+        "magnitude together) to see whether the single-axis-transfer gap narrows or "
+        "widens as uncertainty itself grows or shrinks",
+    )
+    parser.add_argument(
+        "--uncertainty-scales",
+        default="0.5,1,1.5,2",
+        help="comma-separated uncertainty-scale multipliers for --uncertainty-scale-sweep; "
+        "1.0 reproduces the --joint-robustness magnitude exactly",
+    )
     args = parser.parse_args(argv)
     if args.joint_robustness and not (args.sensor_noise_std > 0 and args.workload_distribution):
         parser.error("--joint-robustness requires --sensor-noise-std > 0 and --workload-distribution")
+    if args.uncertainty_scale_sweep and not args.sensor_noise_std > 0:
+        parser.error("--uncertainty-scale-sweep requires --sensor-noise-std > 0")
 
     temp_breakpoints = np.linspace(T_AMBIENT_C, T_SAFETY_MAX_C, args.n_points)
     heat_w = heat_trace()
@@ -317,12 +335,44 @@ def main(argv: list[str] | None = None) -> int:
                 f"{rob['mean_max_temp_c']:<18.1f} {rob['worst_max_temp_c']:<18.1f}"
             )
 
+    uncertainty_scale_points = None
+    if args.uncertainty_scale_sweep:
+        scales = [float(part.strip()) for part in args.uncertainty_scales.split(",") if part.strip()]
+        uncertainty_scale_points = sweep_uncertainty_scale(
+            temp_breakpoints, heat_w, init=baselines["linear_ramp"],
+            scales=scales,
+            base_sensor_noise_std=args.sensor_noise_std,
+            iterations=args.iterations,
+            trials_per_eval=args.joint_trials_per_eval,
+            eval_trials=args.noise_trials,
+            seed=args.seed,
+        )
+
+        print("")
+        print(
+            f"uncertainty-scale sweep (base sensor noise std = {args.sensor_noise_std:.2f} degC "
+            f"at scale=1.0, {args.noise_trials} Monte-Carlo trials per point)"
+        )
+        print(
+            f"{'scale':<8} {'sensor std':<11} {'sensor-robust':<14} {'workload-robust':<16} "
+            f"{'jointly-robust':<15} {'transfer gap':<12}"
+        )
+        for point in uncertainty_scale_points:
+            print(
+                f"{point.scale:<8g} {point.sensor_noise_std:<11.2f} "
+                f"{point.sensor_robust_violation_rate:<14.1%} "
+                f"{point.workload_robust_violation_rate:<16.1%} "
+                f"{point.jointly_robust_violation_rate:<15.1%} "
+                f"{point.transfer_gap:<12.1%}"
+            )
+
     if args.report:
         os.makedirs(os.path.dirname(args.report) or ".", exist_ok=True)
         with open(args.report, "w", encoding="utf-8") as f:
             f.write(
                 render_markdown_report(
-                    evaluations, pareto_points, frontier, robustness, workload_robustness, joint_robustness
+                    evaluations, pareto_points, frontier, robustness, workload_robustness,
+                    joint_robustness, uncertainty_scale_points,
                 )
             )
     return 0
